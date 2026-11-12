@@ -110,9 +110,19 @@ in a temporary home. Add a test there for every user-visible behaviour.
 
 Work happens directly on `main`.
 
+Commit messages follow Conventional Commits, because release-please derives
+the next version and the changelog from them: `feat:` (minor), `fix:`
+(patch), `feat!:` or a `BREAKING CHANGE:` footer (breaking), and `docs:`,
+`test:`, `refactor:`, `chore:`, `ci:` for changes that need no release.
+
 ## Releases
 
-A tag `vX.Y.Z` triggers `.github/workflows/release.yml`, which runs
-`scripts/release.sh`, publishes the archives and commits
-`Formula/spellbook.rb` to `main`. The formula is generated; never edit it by
-hand. Only tag a release when the user asks for one.
+`.github/workflows/release.yml` runs release-please on every push to
+`main`. It maintains a release pull request; merging it creates the tag and
+the GitHub release, and the `publish` job then runs `scripts/release.sh`,
+uploads the archives and commits `Formula/spellbook.rb` to `main`.
+
+- Never create tags or releases by hand, and never edit `CHANGELOG.md`,
+  `.release-please-manifest.json` or `Formula/spellbook.rb`: all three are
+  written by the release workflow.
+- Merging the release pull request is the user's decision.

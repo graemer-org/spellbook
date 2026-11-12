@@ -399,7 +399,13 @@ go vet ./... && gofmt -l .
 
 ### Releasing
 
-Push a tag such as `v0.1.0`. The release workflow runs the tests, builds
-archives for macOS and Linux on Intel and ARM, publishes a GitHub release
-and commits the updated `Formula/spellbook.rb` to `main`, which is what
-`brew install spellbook` reads.
+Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org):
+`feat:` for something new, `fix:` for a repair, `feat!:` or a
+`BREAKING CHANGE:` footer for an incompatible change.
+
+[release-please](https://github.com/googleapis/release-please) reads them
+and keeps a release pull request open with the next version and the
+changelog. Merging that pull request creates the tag and the GitHub release.
+The workflow then builds archives for macOS and Linux on Intel and ARM, adds
+them to the release and commits the updated `Formula/spellbook.rb` to
+`main`, which is what `brew install spellbook` reads.
