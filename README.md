@@ -122,6 +122,19 @@ spellbook autosync enable
 Both tools then run a sync when a session starts, at most once a day, in
 the background.
 
+**5. Add your company's registry next to your own.** Each registry is its
+own repository, so your private one stays private.
+
+```sh
+spellbook registry add acme git@github.com:acme/ai-registry.git --group platform --priority 100
+spellbook registry set mine --prefix collisions
+```
+
+The registry with the higher `--priority` wins when both offer the same
+name, and its instructions are read first. With `--prefix collisions` your
+version of a clashing skill is installed as well, as `mine-<name>`. Give
+`mine` the higher priority if you want yours to win instead.
+
 Useful along the way:
 
 ```sh

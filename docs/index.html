@@ -390,6 +390,7 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
 
     <div class="tabs" role="tablist" aria-label="Use cases">
       <button class="tab" role="tab" id="tab-you" aria-controls="panel-you" aria-selected="true">For yourself</button>
+      <button class="tab" role="tab" id="tab-mix" aria-controls="panel-mix" aria-selected="false" tabindex="-1">Yours plus your company's</button>
       <button class="tab" role="tab" id="tab-project" aria-controls="panel-project" aria-selected="false" tabindex="-1">In a project</button>
       <button class="tab" role="tab" id="tab-org" aria-controls="panel-org" aria-selected="false" tabindex="-1">In an organization</button>
     </div>
@@ -413,6 +414,38 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
 <span class="c"># your own spells</span>
 <span class="p">$ </span>spellbook registry setup ~/code/my-spells
 <span class="p">$ </span>spellbook registry add mine git@github.com:you/my-spells.git
+
+<span class="p">$ </span>spellbook autosync enable</pre>
+      </div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-mix" aria-labelledby="tab-mix" hidden>
+      <div>
+        <h3>Your private spells next to your company's</h3>
+        <p>Subscribe to both. Each registry is its own git repository, so your private one stays private, and Spellbook keeps track of what came from where.</p>
+        <ul>
+          <li><strong>Company first:</strong> the registry with the higher <code>--priority</code> wins when two offer the same name, and its instructions are read first.</li>
+          <li><strong>Nothing gets lost:</strong> with <code>--prefix collisions</code> your version of a clashing skill is installed too, as <code>mine-&lt;name&gt;</code>.</li>
+          <li><strong>Prefer your own?</strong> Give <code>mine</code> the higher priority instead.</li>
+        </ul>
+      </div>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>~</span></div>
+<pre><span class="c"># your company's registry: standards and your team's tooling</span>
+<span class="p">$ </span>spellbook registry add acme \
+    git@github.com:acme/ai-registry.git \
+    --group platform --priority 100
+
+<span class="c"># your own spells, in a private repository</span>
+<span class="p">$ </span>spellbook registry add mine \
+    git@github.com:you/my-spells.git --prefix collisions
+
+<span class="c"># see what is installed, and from which registry</span>
+<span class="p">$ </span>spellbook list
+<span class="o">NAME              KIND   TARGET  REGISTRY
+code-review       skill  claude  acme
+mine-code-review  skill  claude  mine
+standup-notes     skill  claude  mine</span>
 
 <span class="p">$ </span>spellbook autosync enable</pre>
       </div>
