@@ -362,9 +362,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			if err != nil {
 				return nil, err
 			}
-			// Claude Code identifies an agent by its name field, so it always
-			// carries the name it is installed under.
-			content, err := target.RenderDoc(tname, a.doc.Front, a.doc.Body, [][2]string{{"name", a.name}})
+			content, err := target.RenderDoc(tname, a.doc.Front, a.doc.Body, target.AgentFields(tname, a.name))
 			if err != nil {
 				r.warnf("%s: skipped agent %q of %s: %v", tname, a.name, a.registry, err)
 				continue
@@ -514,7 +512,11 @@ func (r *run) claim(taken map[string]string, reg config.Registry, kind, name str
 		r.warnf("%s: %s %q is also provided by %q, which has priority", reg.Name, kind, install, owner)
 		return "", false
 	}
-	if !config.ValidName(install) {
+	valid := config.ValidResourceName
+	if kind == "skill" {
+		valid = config.ValidName
+	}
+	if !valid(install) {
 		r.warnf("%s: skipped %s %q: the prefixed name %q is not a valid name", reg.Name, kind, name, install)
 		return "", false
 	}
@@ -549,14 +551,22 @@ func (r *run) applyItems(want map[string]item) error {
 			return err
 		}
 
-		if !managed {
-			c.Skipped++
-			r.warnf("%s: skipped %s %q: %s exists and is not managed by spellbook", it.target, it.kind, it.name, it.abs)
-			continue
-		}
 		onDisk, err := hashPath(it.abs)
 		if err != nil {
 			return err
+		}
+		if !managed {
+			if onDisk == it.hash {
+				// Exactly what would be written, for example left behind
+				// by a sync that was interrupted before it could record
+				// its work. Taking it over loses nothing.
+				c.Unchanged++
+				r.entries = append(r.entries, entry)
+				continue
+			}
+			c.Skipped++
+			r.warnf("%s: skipped %s %q: %s exists and is not managed by spellbook", it.target, it.kind, it.name, it.abs)
+			continue
 		}
 		switch {
 		case onDisk == it.hash:

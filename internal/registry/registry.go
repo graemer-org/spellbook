@@ -116,21 +116,31 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 		return nil, err
 	}
 	warnings = append(warnings, mwarn...)
-	instructions, iwarn, err := DiscoverInstructions(root)
-	if err != nil {
-		return nil, err
+	// Kinds the subscriber did not ask for are not read at all, so their
+	// problems are not reported either.
+	var instructions []Instruction
+	var agents, prompts []Doc
+	if r.Wants(config.KindInstructions) {
+		var w []string
+		if instructions, w, err = DiscoverInstructions(root); err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, w...)
 	}
-	warnings = append(warnings, iwarn...)
-
-	agents, awarn, err := DiscoverAgents(root)
-	if err != nil {
-		return nil, err
+	if r.Wants(config.KindAgents) {
+		var w []string
+		if agents, w, err = DiscoverAgents(root); err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, w...)
 	}
-	prompts, pwarn, err := DiscoverPrompts(root)
-	if err != nil {
-		return nil, err
+	if r.Wants(config.KindPrompts) {
+		var w []string
+		if prompts, w, err = DiscoverPrompts(root); err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, w...)
 	}
-	warnings = append(append(warnings, awarn...), pwarn...)
 
 	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all, AllInstructions: instructions, AllAgents: agents, AllPrompts: prompts}
 	groups := r.Groups

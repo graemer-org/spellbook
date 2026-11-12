@@ -45,6 +45,7 @@ func init() {
 		Agent: func(loc config.Location, name string) (string, bool) {
 			return filepath.Join(base(loc), "agents", name+".agent.md"), true
 		},
+		AgentNamedByFile: true,
 		Prompt: func(loc config.Location, skillsDir, name string) (PromptPlace, bool) {
 			if loc.Scope != config.ScopeProject {
 				return PromptPlace{}, false

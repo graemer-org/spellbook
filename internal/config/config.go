@@ -140,8 +140,15 @@ func (a AutoSync) ParseInterval(fallback time.Duration) (time.Duration, error) {
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
-// ValidName reports whether s is usable as a registry or skill name.
+// ValidName reports whether s is usable as a registry, group or skill name.
 func ValidName(s string) bool { return nameRe.MatchString(s) }
+
+var resourceNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
+// ValidResourceName reports whether s is usable as the name of an
+// instruction, agent, prompt, MCP server or hook. Unlike skills, the tools
+// accept upper case letters for these, and published collections use them.
+func ValidResourceName(s string) bool { return resourceNameRe.MatchString(s) }
 
 // HomeLocation returns the location of the user-level configuration.
 // SPELLBOOK_CONFIG_DIR overrides the directory; otherwise XDG_CONFIG_HOME is

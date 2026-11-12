@@ -25,6 +25,9 @@ func newEnv(t *testing.T) *env {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("SPELLBOOK_CONFIG_DIR", "")
 	t.Setenv("SPELLBOOK_CACHE_DIR", t.TempDir())
+	// The tests call Execute in this process, so an automatic sync cannot
+	// start a detached copy of the command. It runs in place instead.
+	t.Setenv(autoModeEnv, "inline")
 	return &env{t: t, home: home}
 }
 
@@ -869,10 +872,15 @@ func TestAgentsAreTranslatedForEachTool(t *testing.T) {
 	}
 
 	copilot := read(t, filepath.Join(e.home, ".copilot", "agents", "acme-reviewer.agent.md"))
-	for _, want := range []string{"name: acme-reviewer\n", "model: gpt-5\n", "target: github-copilot\n", "custom-field: kept\n"} {
+	for _, want := range []string{"model: gpt-5\n", "target: github-copilot\n", "custom-field: kept\n"} {
 		if !strings.Contains(copilot, want) {
 			t.Errorf("Copilot agent misses %q:\n%s", want, copilot)
 		}
+	}
+	// Copilot identifies an agent by its file name, so the name field stays
+	// what the author wrote, here nothing.
+	if strings.Contains(copilot, "name:") {
+		t.Errorf("Copilot agent should not get a name field it did not have:\n%s", copilot)
 	}
 	if strings.Contains(copilot, "opus") {
 		t.Errorf("Copilot agent contains Claude's model:\n%s", copilot)
@@ -1534,5 +1542,93 @@ func TestRegistrySetRejectsWhatTheRegistryCannotSatisfy(t *testing.T) {
 	}
 	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "review" {
 		t.Errorf("a rejected change altered what is installed: %q", got)
+	}
+}
+
+func TestForeignRepositoryLayoutsAreUnderstood(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	// Copilot's own naming and frontmatter for instructions.
+	write(t, filepath.Join(repo, "instructions", "csharp.instructions.md"), "---\napplyTo: '**/*.cs, **/*.csproj'\n---\nUse file-scoped namespaces.\n")
+	write(t, filepath.Join(repo, "instructions", "always.instructions.md"), "---\napplyTo: '**'\ndescription: Everywhere\n---\nBe kind.\n")
+	// Agent files with upper case names and a display name.
+	write(t, filepath.Join(repo, "agents", "CSharpExpert.agent.md"), "---\nname: C# Expert\ndescription: Knows C#\n---\nYou know C#.\n")
+	// MCP servers listed in the tools' own file at the root.
+	write(t, filepath.Join(repo, "mcp.json"), `{"mcpServers": {"gh-aw": {"type": "local", "command": "gh", "args": ["aw", "mcp-server"], "tools": ["compile"]}}}`)
+	e.commit(repo, "foreign layout")
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project")
+	out := e.mustRun("registry", "add", "ext", repo, "-p", "--allow", "mcp")
+	if strings.Contains(out, "warning") {
+		t.Errorf("unexpected warnings:\n%s", out)
+	}
+
+	// Path-scoped for both tools, under the plain name.
+	if got := read(t, filepath.Join(project, ".claude", "rules", "csharp.md")); !strings.Contains(got, `- "**/*.cs"`) || !strings.Contains(got, `- "**/*.csproj"`) {
+		t.Errorf("applyTo was not understood as paths:\n%s", got)
+	}
+	if got := read(t, filepath.Join(project, ".github", "instructions", "csharp.instructions.md")); !strings.Contains(got, `applyTo: "**/*.cs,**/*.csproj"`) {
+		t.Errorf("Copilot file is wrong:\n%s", got)
+	}
+	// "**" means always: a rule without paths, and a block for Copilot.
+	if got := read(t, filepath.Join(project, ".claude", "rules", "always.md")); strings.Contains(got, "paths:") {
+		t.Errorf("an instruction for every file should not be path-scoped:\n%s", got)
+	}
+	shared := read(t, filepath.Join(project, ".github", "copilot-instructions.md"))
+	if !strings.Contains(shared, "Be kind.") || strings.Contains(shared, "file-scoped namespaces") {
+		t.Errorf("only the always-on instruction belongs in the shared file:\n%s", shared)
+	}
+
+	// Claude Code needs the id in the name field; Copilot keeps the display name.
+	if got := read(t, filepath.Join(project, ".claude", "agents", "CSharpExpert.md")); !strings.Contains(got, "name: CSharpExpert\n") {
+		t.Errorf("Claude agent:\n%s", got)
+	}
+	if got := read(t, filepath.Join(project, ".github", "agents", "CSharpExpert.agent.md")); !strings.Contains(got, "name: C# Expert") && !strings.Contains(got, "name: 'C# Expert'") {
+		t.Errorf("Copilot agent lost its display name:\n%s", got)
+	}
+
+	// The server from mcp.json, adapted for Claude Code.
+	claude := read(t, filepath.Join(project, ".mcp.json"))
+	if !strings.Contains(claude, `"gh-aw"`) || !strings.Contains(claude, `"stdio"`) || strings.Contains(claude, "tools") {
+		t.Errorf("Claude Code's server definition was not adapted:\n%s", claude)
+	}
+	if got := read(t, filepath.Join(project, ".github", "mcp.json")); !strings.Contains(got, `"local"`) || !strings.Contains(got, `"compile"`) {
+		t.Errorf("Copilot's server definition should stay as written:\n%s", got)
+	}
+}
+
+func TestUnwantedKindsAreNotReadOrReported(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(t, filepath.Join(repo, "agents", "broken.md"), "no frontmatter\n")
+	e.commit(repo, "broken agent")
+	e.mustRun("init", "--target", "claude")
+	if out := e.mustRun("registry", "add", "ext", repo, "--only", "skills"); strings.Contains(out, "broken") {
+		t.Errorf("a problem in a kind that is not wanted should not be reported:\n%s", out)
+	}
+}
+
+func TestInterruptedSyncIsPickedUpAgain(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1", "beta": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	// A sync that was ended after writing the files but before recording
+	// them leaves the files without a state.
+	if err := os.Remove(filepath.Join(e.home, ".config", "spellbook", "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	out := e.mustRun("sync")
+	if strings.Contains(out, "not managed") || !strings.Contains(out, "0 installed, 0 updated, 2 unchanged") {
+		t.Errorf("identical files should be taken over, not reported as foreign:\n%s", out)
+	}
+	// A file with different content is still someone else's.
+	if err := os.Remove(filepath.Join(e.home, ".config", "spellbook", "state.json")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(e.home, ".claude", "skills", "alpha", "SKILL.md"), "mine")
+	if out := e.mustRun("sync"); !strings.Contains(out, "not managed") {
+		t.Errorf("a different file must not be taken over:\n%s", out)
 	}
 }

@@ -766,6 +766,9 @@ func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts s
 	return nil
 }
 
+// autoModeEnv selects how 'sync --auto' does its work; see runAuto.
+const autoModeEnv = "SPELLBOOK_AUTO_MODE"
+
 // runAuto is the sync a session hook starts. It stays silent, because a
 // tool may feed a hook's output to the model, and it never fails, because
 // a broken sync must not get in the way of a session. The outcome is kept
@@ -783,10 +786,22 @@ func runAuto(cmd *cobra.Command, locate func() (config.Location, error)) {
 	if err != nil {
 		return
 	}
-	status, err := autosync.Load(loc)
+	// A session hook is ended together with the session, which can be
+	// seconds after it started. The sync therefore runs in a detached copy
+	// of this program. autoMode is empty for the hook itself, "child" for
+	// that copy, and anything else to do the work in this process.
+	mode := os.Getenv(autoModeEnv)
 	now := time.Now()
-	if err != nil || !status.Due(now, interval) {
-		return
+	if mode != "child" {
+		status, err := autosync.Load(loc)
+		if err != nil || !status.Due(now, interval) {
+			return
+		}
+	}
+	if mode == "" {
+		if autosync.MarkStarted(loc, now) == nil && spawnDetached(autoModeEnv+"=child") {
+			return
+		}
 	}
 	rep, err := syncer.Run(cmd.Context(), loc, cfg, syncer.Options{})
 	if err == nil {
@@ -958,6 +973,8 @@ func newAutosync(locate func() (config.Location, error)) *cobra.Command {
 			switch {
 			case st.LastAttempt.IsZero():
 				fmt.Fprintln(out, "last run never")
+			case st.LastError == autosync.InProgress:
+				fmt.Fprintf(out, "last run %s, %s\n", st.LastAttempt.Format(time.RFC3339), st.LastError)
 			case st.LastError != "":
 				fmt.Fprintf(out, "last run %s, failed: %s\n", st.LastAttempt.Format(time.RFC3339), st.LastError)
 			default:
@@ -1066,7 +1083,7 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 				warn("%s %q for %s (%s) %s", p.Entry.Kind, p.Entry.Name, p.Entry.Target, p.Entry.Path, what)
 			}
 
-			if st, err := autosync.Load(loc); err == nil && st.LastError != "" {
+			if st, err := autosync.Load(loc); err == nil && st.LastError != "" && st.LastError != autosync.InProgress {
 				warn("the last automatic sync failed: %s", st.LastError)
 			}
 			return finish()

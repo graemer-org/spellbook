@@ -77,9 +77,19 @@ go vet ./... && gofmt -l .    # must be clean before committing
   User-level MCP servers are changed through `claude mcp add-json` and
   `claude mcp remove`; the file is only read. The tool may store an entry
   in a different form, which is why the state keeps `source` next to `hash`.
+- **A subscriber should be able to point at any repository.** Published
+  collections use Copilot's conventions (`x.instructions.md` with `applyTo`,
+  `x.agent.md`, upper case names, a root `mcp.json`). Accept those forms
+  where they map cleanly instead of asking authors to rename files.
+- **An interrupted sync must heal.** A file that exists, is not in the state
+  and is identical to what would be written is taken over. Only a file with
+  different content counts as the user's.
 - **`sync --auto` is silent and never fails.** A tool may feed a session
   hook's output to the model, and a broken sync must not block a session.
-  The outcome goes to the status file that `autosync status` reads.
+  It does its work in a detached copy of the program, because a session
+  hook is ended with its session, and marks the run as started so a second
+  session does not sync at the same time. The outcome goes to the status
+  file that `autosync status` reads.
 - **A user's settings file keeps its content and key order.** Only the
   SessionStart entries that run Spellbook are added or removed, and a file
   that is not valid JSON is not touched.

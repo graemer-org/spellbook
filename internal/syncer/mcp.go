@@ -173,6 +173,12 @@ func (r *run) applyMCP(ctx context.Context, want map[target.MCPPlace][]mcpWant) 
 				asked = prev.Hash
 			}
 			switch {
+			case exists && !managed && onDisk == source:
+				// Identical to what would be written: take it over.
+				c.Unchanged++
+				entry.Hash = onDisk
+				r.entries = append(r.entries, entry)
+				continue
 			case exists && !managed:
 				c.Skipped++
 				r.warnf("%s: skipped MCP server %q: %s already has a server of that name that spellbook does not manage", w.target, w.name, place.File)

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -58,8 +59,9 @@ func DiscoverInstructions(root string) ([]Instruction, []string, error) {
 		}
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
-		name := strings.TrimSuffix(d.Name(), ".md")
-		if !config.ValidName(name) {
+		// Copilot's own naming, "<name>.instructions.md", is accepted too.
+		name := strings.TrimSuffix(strings.TrimSuffix(d.Name(), ".md"), ".instructions")
+		if !config.ValidResourceName(name) {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: %q is not a valid instruction name", rel, name))
 			return nil
 		}
@@ -97,11 +99,16 @@ func parseInstruction(name, text string) (Instruction, error) {
 		var meta struct {
 			Description string    `yaml:"description"`
 			Paths       yaml.Node `yaml:"paths"`
+			// ApplyTo is Copilot's name for the same thing.
+			ApplyTo yaml.Node `yaml:"applyTo"`
 		}
 		if err := yaml.Unmarshal([]byte(front), &meta); err != nil {
 			return ins, fmt.Errorf("invalid frontmatter: %v", err)
 		}
 		ins.Description = meta.Description
+		if meta.Paths.Kind == 0 {
+			meta.Paths = meta.ApplyTo
+		}
 		switch meta.Paths.Kind {
 		case 0:
 		case yaml.ScalarNode:
@@ -117,6 +124,10 @@ func parseInstruction(name, text string) (Instruction, error) {
 			}
 		default:
 			return ins, fmt.Errorf("paths must be a list of globs or a comma-separated string")
+		}
+		// A glob that matches every file is how Copilot writes "always".
+		if slices.ContainsFunc(ins.Paths, func(p string) bool { return p == "**" || p == "*" || p == "**/*" }) {
+			ins.Paths = nil
 		}
 	}
 	ins.Body = strings.Trim(body, "\n") + "\n"

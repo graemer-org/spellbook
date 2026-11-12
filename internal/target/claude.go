@@ -51,6 +51,15 @@ func init() {
 			}
 			return MCPPlace{File: filepath.Join(loc.Root, ".claude.json"), ViaCLI: true}, true
 		},
+		MCPDefaults: func(def map[string]any) {
+			// Definitions written for Copilot call a local process "local"
+			// and list the tools to enable. Claude Code calls the former
+			// "stdio" and has no such list.
+			if def["type"] == "local" {
+				def["type"] = "stdio"
+			}
+			delete(def, "tools")
+		},
 		Hooks: func(loc config.Location) (HookPlace, bool) {
 			return HookPlace{File: filepath.Join(loc.Root, ".claude", "settings.json")}, true
 		},

@@ -112,7 +112,7 @@ func discoverDocs(root, dir, kind string, check func(Doc) error) ([]Doc, []strin
 		rel, _ := filepath.Rel(root, p)
 		rel = filepath.ToSlash(rel)
 		name := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSuffix(d.Name(), ".md"), ".agent"), ".prompt")
-		if !config.ValidName(name) {
+		if !config.ValidResourceName(name) {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: %q is not a valid %s name", rel, name, kind))
 			return nil
 		}

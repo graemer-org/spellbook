@@ -82,6 +82,11 @@ type Spec struct {
 
 	// Agent returns the file an agent is written to.
 	Agent func(loc config.Location, name string) (string, bool)
+	// AgentNamedByFile is true when the tool identifies an agent by its
+	// file name. The "name" in the frontmatter is then only a display name
+	// and is left as the author wrote it. Otherwise the tool identifies an
+	// agent by that field, which is set to the installed name.
+	AgentNamedByFile bool
 
 	// Prompt returns where a prompt is written. skillsDir is the target's
 	// skills directory, for tools that run prompts as skills.
@@ -220,6 +225,15 @@ func AgentFile(name string, loc config.Location, agent string) (string, error) {
 		return "", ErrUnsupported
 	}
 	return file, nil
+}
+
+// AgentFields returns the frontmatter fields that are set for an agent
+// installed under the given name.
+func AgentFields(name, agent string) [][2]string {
+	if specs[name].AgentNamedByFile {
+		return nil
+	}
+	return [][2]string{{"name", agent}}
 }
 
 // PromptFor returns where the named prompt is written.

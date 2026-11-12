@@ -284,6 +284,7 @@ Any git repository works as a registry.
   `agents/` an agent and below `prompts/` a prompt, each named after its
   file.
 - Every JSON file in `mcp/` is an MCP server, named after its file.
+  Servers listed in a `mcp.json` or `.mcp.json` at the root count too.
 - Every JSON file in `hooks/`, or directory there with a `hook.json`, is a
   hook.
 
@@ -334,6 +335,10 @@ Pin provider versions. Never hard-code account IDs.
 Without `paths` an instruction always applies. With `paths` it applies only
 to matching files.
 
+Files written for Copilot work as they are: `name.instructions.md` is
+installed as `name`, `applyTo` is read like `paths`, and `applyTo: "**"`
+means always.
+
 | | Claude Code | GitHub Copilot |
 |---|---|---|
 | Always applies | `.claude/rules/<name>.md` | a marked block in `copilot-instructions.md` |
@@ -376,8 +381,10 @@ copilot:
 You are a careful code reviewer. ...
 ```
 
-Spellbook sets `name` to the name the agent is installed under. Copilot
-accepts Claude Code's tool names, so one `tools` list serves both.
+Claude Code identifies an agent by its `name`, so there Spellbook sets it to
+the name the agent is installed under. Copilot goes by the file name and
+keeps `name` as a display name. Copilot accepts Claude Code's tool names, so
+one `tools` list serves both. Files named `name.agent.md` are accepted too.
 
 ### Prompts
 
@@ -598,8 +605,8 @@ that runs `spellbook sync --auto` when a session starts:
   and hooks stay as they are.
 - GitHub Copilot: the file `~/.copilot/hooks/spellbook.json`.
 
-The automatic sync runs at most once a day, in the background, prints
-nothing and never fails a session. `spellbook autosync status` shows when it
+The automatic sync runs at most once a day, detached from the session that
+started it, prints nothing and never fails a session. `spellbook autosync status` shows when it
 last ran and whether it worked. Set the pace with `autosync.interval` in the
 configuration.
 

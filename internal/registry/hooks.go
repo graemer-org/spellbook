@@ -89,7 +89,7 @@ func DiscoverHooks(root string, tools []string) ([]Hook, []string, error) {
 		skip := func(format string, args ...any) {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: %s", rel, fmt.Sprintf(format, args...)))
 		}
-		if !config.ValidName(h.Name) {
+		if !config.ValidResourceName(h.Name) {
 			skip("%q is not a valid hook name", h.Name)
 			continue
 		}

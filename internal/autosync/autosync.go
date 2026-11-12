@@ -70,19 +70,37 @@ func (s Status) Due(now time.Time, interval time.Duration) bool {
 	return s.LastError == "" || now.Sub(s.LastAttempt) >= wait
 }
 
+// InProgress is what LastError holds while an automatic sync is running.
+// It keeps other sessions from starting a second one at the same time.
+const InProgress = "still running, or interrupted before it finished"
+
+// MarkStarted records that an automatic sync is about to run.
+func MarkStarted(loc config.Location, now time.Time) error {
+	return write(loc, func(s *Status) {
+		s.LastAttempt = now
+		s.LastError = InProgress
+	})
+}
+
 // Record stores the outcome of an automatic sync that just ran.
 func Record(loc config.Location, now time.Time, syncErr error) error {
+	return write(loc, func(s *Status) {
+		s.LastAttempt = now
+		s.LastError = ""
+		if syncErr != nil {
+			s.LastError = syncErr.Error()
+		} else {
+			s.LastSuccess = now
+		}
+	})
+}
+
+func write(loc config.Location, change func(*Status)) error {
 	s, err := Load(loc)
 	if err != nil {
 		return err
 	}
-	s.LastAttempt = now
-	s.LastError = ""
-	if syncErr != nil {
-		s.LastError = syncErr.Error()
-	} else {
-		s.LastSuccess = now
-	}
+	change(&s)
 	path, err := statusPath(loc)
 	if err != nil {
 		return err
