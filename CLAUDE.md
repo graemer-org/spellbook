@@ -100,7 +100,8 @@ in a temporary home. Add a test there for every user-visible behaviour.
 4. Agents and prompts, with frontmatter translation per target (done)
 5. Automatic sync, `sync --check` for CI, `doctor` (done)
 6. MCP servers, allowed per registry (done)
-7. Installation with Homebrew through a tap
+7. Installation with Homebrew through a tap (set up; this repository is
+   the tap, the first release creates the formula)
 8. Hooks from registries: Claude Code and Copilot use different schemas and
    event names, and hooks execute code, so they need a translation layer
    and the same permission as MCP servers
@@ -108,3 +109,10 @@ in a temporary home. Add a test there for every user-visible behaviour.
 ## Workflow
 
 Work happens directly on `main`.
+
+## Releases
+
+A tag `vX.Y.Z` triggers `.github/workflows/release.yml`, which runs
+`scripts/release.sh`, publishes the archives and commits
+`Formula/spellbook.rb` to `main`. The formula is generated; never edit it by
+hand. Only tag a release when the user asks for one.

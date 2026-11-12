@@ -14,6 +14,15 @@ what changed and removes what was deleted, for both tools at the same time.
 
 ## Install
 
+With Homebrew, on macOS and Linux:
+
+```sh
+brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
+brew install spellbook
+```
+
+Or with Go:
+
 ```sh
 go install github.com/graemer-org/spellbook/cmd/spellbook@latest
 ```
@@ -378,7 +387,7 @@ Spellbook records everything it installs and only ever changes those paths.
 4. Agents and prompts — done
 5. Automatic sync, `sync --check` for CI, `doctor` — done
 6. MCP servers, allowed per registry — done
-7. Installation with Homebrew
+7. Installation with Homebrew — set up, available from the first release
 8. Hooks from registries
 
 ## Development
@@ -387,3 +396,10 @@ Spellbook records everything it installs and only ever changes those paths.
 go test ./...
 go vet ./... && gofmt -l .
 ```
+
+### Releasing
+
+Push a tag such as `v0.1.0`. The release workflow runs the tests, builds
+archives for macOS and Linux on Intel and ARM, publishes a GitHub release
+and commits the updated `Formula/spellbook.rb` to `main`, which is what
+`brew install spellbook` reads.
