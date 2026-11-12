@@ -621,6 +621,12 @@ func (r *run) applyItems(want map[string]item) error {
 		if _, err := os.Lstat(abs); os.IsNotExist(err) {
 			continue
 		}
+		if e.Pending {
+			// Pushed to the registry, which does not offer it yet. It
+			// stays until it does.
+			r.entries = append(r.entries, e)
+			continue
+		}
 		c := r.counts(e.Target)
 		onDisk, err := hashPath(abs)
 		if err != nil {

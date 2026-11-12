@@ -54,6 +54,26 @@ func listFiles(root string) ([]file, error) {
 	return files, nil
 }
 
+// File is one regular file below a directory.
+type File struct {
+	// Rel is the slash-separated path relative to the directory.
+	Rel  string
+	Exec bool
+}
+
+// List returns the files HashDir and CopyDir work on.
+func List(root string) ([]File, error) {
+	files, err := listFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]File, len(files))
+	for i, f := range files {
+		out[i] = File{Rel: f.rel, Exec: f.exec}
+	}
+	return out, nil
+}
+
 // HashDir returns a content hash over the files in root: their relative
 // paths, executable bits and contents.
 func HashDir(root string) (string, error) {

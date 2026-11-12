@@ -139,3 +139,75 @@ func Uncommitted(ctx context.Context, dir string, paths []string) int {
 	}
 	return len(strings.Split(out, "\n"))
 }
+
+// File is a file to add to a repository.
+type File struct {
+	// Path is slash-separated and relative to the repository root.
+	Path string
+	Data []byte
+	Exec bool
+}
+
+// Propose clones the repository at url, puts the files on a new branch
+// based on base, commits them and pushes the branch. An empty base means
+// the default branch. edit, when not nil, may change the checkout before
+// the commit. Nothing is pushed when there is nothing to commit.
+func Propose(ctx context.Context, url, base, branch, message string, files []File, edit func(dir string) error) error {
+	dir, err := os.MkdirTemp("", "spellbook-push-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	args := []string{"clone", "--quiet", "--depth", "1"}
+	if base != "" {
+		args = append(args, "--branch", base)
+	}
+	if _, err := run(ctx, "", append(args, url, dir)...); err != nil {
+		if base != "" {
+			return fmt.Errorf("%w (the registry's ref %q must be a branch or tag to push from)", err, base)
+		}
+		return err
+	}
+	if _, err := run(ctx, dir, "checkout", "--quiet", "-b", branch); err != nil {
+		return err
+	}
+	if err := WriteFiles(dir, files); err != nil {
+		return err
+	}
+	if edit != nil {
+		if err := edit(dir); err != nil {
+			return err
+		}
+	}
+	if _, err := run(ctx, dir, "add", "-A"); err != nil {
+		return err
+	}
+	if _, err := run(ctx, dir, "diff", "--cached", "--quiet"); err == nil {
+		return fmt.Errorf("the registry already contains exactly this; nothing to push")
+	}
+	if _, err := run(ctx, dir, "commit", "--quiet", "-m", message); err != nil {
+		return err
+	}
+	if _, err := run(ctx, dir, "push", "--quiet", "origin", branch); err != nil {
+		return fmt.Errorf("%w (if the branch already exists there, choose another with --branch)", err)
+	}
+	return nil
+}
+
+// WriteFiles writes the files below dir, creating directories as needed.
+func WriteFiles(dir string, files []File) error {
+	for _, f := range files {
+		path := filepath.Join(dir, filepath.FromSlash(f.Path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		mode := os.FileMode(0o644)
+		if f.Exec {
+			mode = 0o755
+		}
+		if err := os.WriteFile(path, f.Data, mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}

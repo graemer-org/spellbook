@@ -2,11 +2,13 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -20,6 +22,7 @@ import (
 	"github.com/graemer-org/spellbook/internal/config"
 	"github.com/graemer-org/spellbook/internal/gitx"
 	"github.com/graemer-org/spellbook/internal/lock"
+	"github.com/graemer-org/spellbook/internal/push"
 	"github.com/graemer-org/spellbook/internal/registry"
 	"github.com/graemer-org/spellbook/internal/state"
 	"github.com/graemer-org/spellbook/internal/syncer"
@@ -69,7 +72,7 @@ func newRoot() *cobra.Command {
 		return config.HomeLocation()
 	}
 
-	root.AddCommand(newInit(&project), newRegistry(locate), newGroup(locate), newSync(locate), newDiff(locate), newList(locate), newAutosync(locate), newDoctor(locate))
+	root.AddCommand(newInit(&project), newRegistry(locate), newGroup(locate), newSync(locate), newDiff(locate), newPush(locate), newList(locate), newAutosync(locate), newDoctor(locate))
 	return root
 }
 
@@ -1188,6 +1191,210 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 	return cmd
 }
 
+func newPush(locate func() (config.Location, error)) *cobra.Command {
+	var to, from, group, branch, message, into string
+	var dryRun, yes bool
+	cmd := &cobra.Command{
+		Use:   "push [<path> | <kind> <name>]...",
+		Short: "Propose something you created locally to a registry",
+		Long: "Take a skill, instruction, agent or prompt that you created where one of your\n" +
+			"tools reads it, turn it into the form a registry holds, and push it to the\n" +
+			"registry on a new branch. You get the link to open a pull request.\n\n" +
+			"Name what to push by its path, or by its kind and name. Without arguments,\n" +
+			"push lists what it finds.",
+		Example: "  spellbook push                                   # what could be pushed\n" +
+			"  spellbook push .claude/skills/db-migration --to acme\n" +
+			"  spellbook push agent reviewer --to acme --group platform\n" +
+			"  spellbook push skill db-migration --to acme --into ~/code/ai-registry",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loc, err := locate()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(loc)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			all, err := push.Candidates(loc, cfg)
+			if err != nil {
+				return err
+			}
+			if len(args) == 0 {
+				w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+				n := 0
+				for _, c := range all {
+					if c.Managed && !c.Pending {
+						continue
+					}
+					if n == 0 {
+						fmt.Fprintln(w, "KIND\tNAME\tTOOL\tSTATUS\tPATH")
+					}
+					n++
+					status := "local"
+					if c.Pending {
+						status = "pushed to " + c.Registry
+					}
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", c.Kind, c.Name, c.Target, status, c.Path)
+				}
+				if n == 0 {
+					fmt.Fprintln(out, "Nothing to push: every skill, instruction, agent and prompt your tools have came from a registry.")
+					return nil
+				}
+				if err := w.Flush(); err != nil {
+					return err
+				}
+				fmt.Fprintln(out, "Push one with: spellbook push <path> --to <registry>")
+				return nil
+			}
+
+			if to == "" {
+				if len(cfg.Registries) != 1 {
+					return fmt.Errorf("say which registry with --to (configured: %s)", registryNames(cfg))
+				}
+				to = cfg.Registries[0].Name
+			}
+			reg, ok := cfg.Registry(to)
+			if !ok {
+				return fmt.Errorf("no registry named %q (configured: %s)", to, registryNames(cfg))
+			}
+			if from != "" && !target.Known(from) {
+				return fmt.Errorf("unknown tool %q for --from (supported: %s)", from, strings.Join(target.Names(), ", "))
+			}
+			items, err := push.Select(all, args, from)
+			if err != nil {
+				return err
+			}
+
+			// Look at everything the registry holds, whatever this
+			// subscription is limited to.
+			whole := config.Registry{Name: reg.Name, URL: reg.URL, Ref: reg.Ref, Path: reg.Path}
+			snap, err := registry.Fetch(cmd.Context(), whole)
+			if err != nil {
+				return fmt.Errorf("registry %s: %w", reg.Name, err)
+			}
+			var files []gitx.File
+			var names []string
+			for _, it := range items {
+				if push.Exists(snap, it) {
+					return fmt.Errorf("registry %s already has a %s named %q; pushing changes to a resource the registry already has is not supported yet", reg.Name, it.Kind, it.Name)
+				}
+				files = append(files, push.Prefix(reg.Path, it.Files)...)
+				names = append(names, it.Name)
+			}
+			if group != "" && (snap.Manifest == nil || !slices.Contains(snap.Manifest.GroupNames(), group)) {
+				available := "none, it has no registry.toml"
+				if snap.Manifest != nil {
+					available = strings.Join(snap.Manifest.GroupNames(), ", ")
+				}
+				return fmt.Errorf("registry %s has no group %q (available: %s)", reg.Name, group, available)
+			}
+			if branch == "" {
+				branch = "spellbook/add-" + names[0]
+				if len(names) > 1 {
+					branch += fmt.Sprintf("-and-%d-more", len(names)-1)
+				}
+			}
+			if message == "" {
+				message = fmt.Sprintf("Add %s %s", items[0].Kind, items[0].Name)
+				if len(items) > 1 {
+					message = fmt.Sprintf("Add %d resources: %s", len(items), strings.Join(names, ", "))
+				}
+			}
+
+			for _, it := range items {
+				n := 0
+				for _, f := range it.Files {
+					n += len(f.Data)
+				}
+				count := fmt.Sprintf("%d files", len(it.Files))
+				if len(it.Files) == 1 {
+					count = "1 file"
+				}
+				fmt.Fprintf(out, "%s %s (%s, %s) from %s\n", it.Kind, it.Name, count, size(n), it.Path)
+				fmt.Fprintf(out, "  -> %s: %s\n", reg.Name, path.Join(filepath.ToSlash(reg.Path), it.Dest))
+				for _, note := range it.Notes {
+					fmt.Fprintf(out, "  note: %s\n", note)
+				}
+			}
+			switch {
+			case group != "":
+				fmt.Fprintf(out, "They are added to the group %q in %s.\n", group, registry.ManifestFile)
+			case snap.Manifest != nil && len(snap.Manifest.Groups) > 0:
+				fmt.Fprintf(out, "note: registry %s sorts its resources into groups (%s). Until this is in a group, people who\n      use groups do not get it. Pass --group, or add it in the pull request.\n", reg.Name, strings.Join(snap.Manifest.GroupNames(), ", "))
+			}
+			if dryRun {
+				fmt.Fprintln(out, "Dry run: nothing was sent.")
+				return nil
+			}
+
+			edit := func(dir string) error {
+				if group == "" {
+					return nil
+				}
+				return push.AddToGroup(filepath.Join(dir, filepath.FromSlash(reg.Path)), group, items)
+			}
+			if into != "" {
+				if info, err := os.Stat(into); err != nil || !info.IsDir() {
+					return fmt.Errorf("%s is not a directory", into)
+				}
+				if err := gitx.WriteFiles(into, files); err != nil {
+					return err
+				}
+				if err := edit(into); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "Written to %s. Commit and push it there yourself.\n", into)
+			} else {
+				if !yes {
+					fmt.Fprintf(out, "Push this to %s on the new branch %s? [y/N] ", reg.URL, branch)
+					answer, _ := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+					if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
+						return fmt.Errorf("not confirmed, nothing was sent (pass --yes to skip the question)")
+					}
+				}
+				if err := gitx.Propose(cmd.Context(), reg.URL, reg.Ref, branch, message, files, edit); err != nil {
+					return err
+				}
+				fmt.Fprintf(out, "Pushed the branch %s to %s.\n", branch, reg.Name)
+				if link := push.PullRequestURL(reg.URL, branch); link != "" {
+					fmt.Fprintf(out, "Open a pull request:\n  %s\n", link)
+				}
+			}
+
+			var pending []syncer.PendingItem
+			for _, it := range items {
+				pending = append(pending, it.PendingItem(reg.Name))
+			}
+			if err := syncer.MarkPending(loc, pending); err != nil {
+				return err
+			}
+			fmt.Fprintln(out, "Your local copy stays. Once the registry offers it, 'spellbook sync' replaces it with the registry's version.")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&to, "to", "", "the registry to push to (default: the only one configured)")
+	cmd.Flags().StringVar(&from, "from", "", "the tool to take it from, when several have it with different content")
+	cmd.Flags().StringVar(&group, "group", "", "also add it to this group in the registry's registry.toml")
+	cmd.Flags().StringVar(&branch, "branch", "", "the name of the new branch (default: spellbook/add-<name>)")
+	cmd.Flags().StringVarP(&message, "message", "m", "", "the commit message (default: Add <kind> <name>)")
+	cmd.Flags().StringVar(&into, "into", "", "write into this local clone of the registry instead of pushing a branch")
+	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "show what would be sent without sending it")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask before pushing")
+	return cmd
+}
+
+func registryNames(cfg *config.Config) string {
+	if len(cfg.Registries) == 0 {
+		return "none"
+	}
+	names := make([]string, len(cfg.Registries))
+	for i, r := range cfg.Registries {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", ")
+}
+
 // Above these amounts 'doctor' points out what the installed resources
 // add to every session.
 const (
@@ -1235,7 +1442,11 @@ func newList(locate func() (config.Location, error)) *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "NAME\tKIND\tTARGET\tREGISTRY\tCOMMIT\tPATH")
 			for _, e := range entries {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, e.Kind, e.Target, e.Registry, short(e.Commit), e.Path)
+				commit := short(e.Commit)
+				if e.Pending {
+					commit = "pushed"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, e.Kind, e.Target, e.Registry, commit, e.Path)
 			}
 			return w.Flush()
 		},

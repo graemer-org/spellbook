@@ -67,7 +67,8 @@ func splitFrontmatter(text string) (front, body string, has bool, err error) {
 	return "", "", false, fmt.Errorf("the frontmatter is not closed with '---'")
 }
 
-func parseDoc(name, text string) (Doc, error) {
+// ParseDoc reads a Markdown file with optional frontmatter.
+func ParseDoc(name, text string) (Doc, error) {
 	d := Doc{Name: name, raw: text}
 	front, body, has, err := splitFrontmatter(text)
 	if err != nil {
@@ -124,7 +125,7 @@ func discoverDocs(root, dir, kind string, check func(Doc) error) ([]Doc, []strin
 		if err != nil {
 			return err
 		}
-		doc, err := parseDoc(name, string(data))
+		doc, err := ParseDoc(name, string(data))
 		if err == nil && check != nil {
 			err = check(doc)
 		}

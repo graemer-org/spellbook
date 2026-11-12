@@ -29,6 +29,10 @@ type Entry struct {
 	// Source is the hash of what Spellbook asked for, recorded only when a
 	// tool stores it in a different form than it was given.
 	Source string `json:"source,omitempty"`
+	// Pending marks a resource the user pushed to a registry that does not
+	// offer it yet. It is kept, and once the registry offers it the sync
+	// may replace it like any other resource it installed.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // State is the content of a state.json file.

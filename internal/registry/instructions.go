@@ -73,7 +73,7 @@ func DiscoverInstructions(root string) ([]Instruction, []string, error) {
 		if err != nil {
 			return err
 		}
-		ins, err := parseInstruction(name, string(data))
+		ins, err := ParseInstruction(name, string(data))
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: %v", rel, err))
 			return nil
@@ -89,7 +89,9 @@ func DiscoverInstructions(root string) ([]Instruction, []string, error) {
 	return out, warnings, nil
 }
 
-func parseInstruction(name, text string) (Instruction, error) {
+// ParseInstruction reads an instruction file: optional frontmatter with a
+// description and paths (or Copilot's applyTo), then the text.
+func ParseInstruction(name, text string) (Instruction, error) {
 	ins := Instruction{Name: name}
 	front, body, has, err := splitFrontmatter(text)
 	if err != nil {

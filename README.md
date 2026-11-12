@@ -55,6 +55,7 @@ says how many. [Notes on each tool](#notes-on-each-tool) has the details.
 - [Use it for yourself](#use-it-for-yourself)
 - [Use it in a project](#use-it-in-a-project)
 - [Use it in an organization](#use-it-in-an-organization)
+- [Pushing something back](#pushing-something-back)
 - [Writing a registry](#writing-a-registry)
 - [Reference](#reference)
 - [What Spellbook will and will not touch](#what-spellbook-will-and-will-not-touch)
@@ -290,6 +291,59 @@ For repositories, use the project setup from the section above and add
 `spellbook sync --project --check` to CI. That way a repository carries a
 pinned, reviewed copy of the organization's tooling, and cloud agents see
 it too.
+
+## Pushing something back
+
+Skills are usually born in a project: someone writes one in
+`.claude/skills/`, it proves useful, and it should go to the registry so
+everyone gets it. `spellbook push` does that.
+
+```sh
+spellbook push                                         # what is local and could be pushed
+spellbook push .claude/skills/db-migration --to acme   # by path
+spellbook push agent reviewer --to acme                # or by kind and name
+```
+
+```
+skill db-migration (3 files, 4 KB) from .claude/skills/db-migration
+  -> acme: skills/db-migration
+Push this to git@github.com:acme/ai-registry.git on the new branch spellbook/add-db-migration? [y/N] y
+Pushed the branch spellbook/add-db-migration to acme.
+Open a pull request:
+  https://github.com/acme/ai-registry/compare/spellbook/add-db-migration?expand=1
+```
+
+Push never changes the registry's main branch. It pushes a new branch with
+your own `git` and gives you the link to open a pull request, so the change
+is reviewed like any other.
+
+- **It works out what you are pushing** from where the file lies: a skill,
+  an instruction, an agent or a prompt, written for Claude Code or Copilot.
+  MCP servers, hooks and the other tools' formats are not supported yet.
+- **It turns the tool's form into the registry's.** Copilot's `applyTo`
+  becomes `paths`. Fields only one tool understands, such as an agent's
+  `model`, move under that tool's name, and push tells you so.
+- **Your local copy stays.** It is marked as pushed. Once the pull request
+  is merged, `spellbook sync` replaces it with the registry's version and
+  installs it for your other tools. If you edit it in the meantime, the
+  sync leaves it alone and says so.
+- **Groups.** `--group platform` also adds it to that group in the
+  registry's `registry.toml`. Without it, push reminds you that people who
+  use groups will not get it until it is in one.
+- **Several at once** go into one branch: `spellbook push a.md b.md`.
+
+| Flag | Meaning |
+|---|---|
+| `--to acme` | the registry; not needed when only one is configured |
+| `--group platform` | add it to this group |
+| `--from claude` | which tool's copy, when two differ |
+| `--branch`, `--message` | name of the branch, commit message |
+| `--dry-run` | show what would be sent |
+| `--into ~/code/ai-registry` | write into your local clone instead of pushing |
+| `--yes` | do not ask |
+
+A resource the registry already has cannot be pushed yet; that includes
+changes you made to something that came from the registry.
 
 ## Writing a registry
 
@@ -558,6 +612,7 @@ spellbook group leave <registry> <group>...
 
 spellbook sync [--dry-run] [--force] [--locked] [--check]
 spellbook diff [registry] [--patch]
+spellbook push [<path> | <kind> <name>]... [--to <registry>] [--group <group>]
 spellbook list
 
 spellbook autosync enable|disable|status

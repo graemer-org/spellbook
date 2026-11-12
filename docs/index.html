@@ -157,8 +157,8 @@
   pre .o { color: #86efac; }
 
   /* Steps */
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; counter-reset: step; }
-  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 26px; box-shadow: var(--shadow); }
+  .steps { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; counter-reset: step; }
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 22px; box-shadow: var(--shadow); }
   .step::before {
     counter-increment: step; content: counter(step);
     display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
@@ -166,7 +166,8 @@
     border: 1px solid var(--line);
   }
   .step p { color: var(--muted); margin: 10px 0 0; font-size: .98rem; }
-  @media (max-width: 860px) { .steps { grid-template-columns: 1fr; } }
+  @media (max-width: 1000px) { .steps { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 600px) { .steps { grid-template-columns: 1fr; } }
 
   /* Kinds */
   .band { background: var(--surface-2); border-block: 1px solid var(--line); }
@@ -339,6 +340,10 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
       <div class="step">
         <h3>Stay in sync</h3>
         <p><code>spellbook sync</code> installs what is new, updates what changed and removes what was deleted. With autosync it happens when a session starts.</p>
+      </div>
+      <div class="step">
+        <h3>Push back what you make</h3>
+        <p>A skill that grew in a project? <code>spellbook push</code> puts it on a branch of the registry and hands you the pull request link.</p>
       </div>
     </div>
   </div>
