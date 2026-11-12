@@ -96,5 +96,11 @@ func hashes(snap *registry.Snapshot) (map[string]string, error) {
 	for _, in := range snap.Instructions {
 		m[registry.InstructionsDir+"/"+in.Name] = in.Hash()
 	}
+	for _, d := range snap.Agents {
+		m[registry.AgentsDir+"/"+d.Name] = d.Hash()
+	}
+	for _, d := range snap.Prompts {
+		m[registry.PromptsDir+"/"+d.Name] = d.Hash()
+	}
 	return m, nil
 }

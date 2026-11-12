@@ -73,10 +73,12 @@ type Registry struct {
 const (
 	KindSkills       = "skills"
 	KindInstructions = "instructions"
+	KindAgents       = "agents"
+	KindPrompts      = "prompts"
 )
 
 // Kinds lists the valid values of Registry.Only.
-var Kinds = []string{KindSkills, KindInstructions}
+var Kinds = []string{KindSkills, KindInstructions, KindAgents, KindPrompts}
 
 // Wants reports whether the subscriber wants resources of the given kind.
 func (r Registry) Wants(kind string) bool {

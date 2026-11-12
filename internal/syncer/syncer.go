@@ -30,6 +30,11 @@ const (
 	// KindBlock is an instruction kept as a marked block inside a file that
 	// may also hold the user's text. Its state path is "<file>#<block id>".
 	KindBlock = "instruction-block"
+	// KindAgent is an agent definition file.
+	KindAgent = "agent"
+	// KindPrompt is a prompt: a file, or a skill directory for a tool that
+	// runs prompts as skills.
+	KindPrompt = "prompt"
 )
 
 // FetchFunc fetches one registry. Tests replace it.
@@ -56,6 +61,8 @@ type RegistryReport struct {
 	Previous     string
 	Skills       int
 	Instructions int
+	Agents       int
+	Prompts      int
 	Err          error
 }
 
@@ -123,6 +130,8 @@ type resource struct {
 	hash string
 	// Instructions.
 	ins registry.Instruction
+	// Agents and prompts.
+	doc registry.Doc
 }
 
 // run carries the state of one sync.
@@ -178,8 +187,9 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 	regs := append([]config.Registry(nil), cfg.Registries...)
 	sort.SliceStable(regs, func(i, j int) bool { return regs[i].Priority > regs[j].Priority })
 
-	var skills, instructions []resource
+	var skills, instructions, agents, prompts []resource
 	skillNames, instructionNames := map[string]string{}, map[string]string{}
+	agentNames, promptNames := map[string]string{}, map[string]string{}
 	for _, reg := range regs {
 		prev, hasPrev := lk.Get(reg.Name)
 		if hasPrev && prev.URL != reg.URL {
@@ -205,7 +215,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			fail(err)
 			continue
 		}
-		rr := RegistryReport{Name: reg.Name, Commit: snap.Commit, Skills: len(snap.Skills), Instructions: len(snap.Instructions)}
+		rr := RegistryReport{Name: reg.Name, Commit: snap.Commit, Skills: len(snap.Skills), Instructions: len(snap.Instructions), Agents: len(snap.Agents), Prompts: len(snap.Prompts)}
 		if hasPrev {
 			rr.Previous = prev.Commit
 		}
@@ -243,6 +253,16 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			}
 			instructions = append(instructions, resource{name: name, registry: reg.Name, commit: snap.Commit, ins: ins})
 		}
+		for _, doc := range snap.Agents {
+			if name, ok := r.claim(agentNames, reg, "agent", doc.Name); ok {
+				agents = append(agents, resource{name: name, registry: reg.Name, commit: snap.Commit, doc: doc})
+			}
+		}
+		for _, doc := range snap.Prompts {
+			if name, ok := r.claim(promptNames, reg, "prompt", doc.Name); ok {
+				prompts = append(prompts, resource{name: name, registry: reg.Name, commit: snap.Commit, doc: doc})
+			}
+		}
 	}
 
 	// Work out what each target should contain.
@@ -277,6 +297,67 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 				continue
 			}
 			add(item{abs: place.File, target: tname, kind: KindInstruction, name: in.name, registry: in.registry, commit: in.commit, hash: hashBytes(content), content: content})
+		}
+		for _, a := range agents {
+			file, err := target.AgentFile(tname, loc, a.name)
+			if err != nil {
+				return nil, err
+			}
+			// Claude Code identifies an agent by its name field, so it always
+			// carries the name it is installed under.
+			content, err := target.RenderDoc(tname, a.doc.Front, a.doc.Body, [][2]string{{"name", a.name}})
+			if err != nil {
+				r.warnf("%s: skipped agent %q of %s: %v", tname, a.name, a.registry, err)
+				continue
+			}
+			add(item{abs: file, target: tname, kind: KindAgent, name: a.name, registry: a.registry, commit: a.commit, hash: hashBytes(content), content: content})
+		}
+		unsupported := 0
+		for _, p := range prompts {
+			place, err := target.PromptFor(tname, cfg.Targets[tname], loc, p.name)
+			if err != nil {
+				return nil, err
+			}
+			if !place.Supported {
+				unsupported++
+				continue
+			}
+			if !place.AsSkill {
+				content, err := target.RenderDoc(tname, p.doc.Front, p.doc.Body, nil)
+				if err != nil {
+					r.warnf("%s: skipped prompt %q of %s: %v", tname, p.name, p.registry, err)
+					continue
+				}
+				add(item{abs: place.Path, target: tname, kind: KindPrompt, name: p.name, registry: p.registry, commit: p.commit, hash: hashBytes(content), content: content})
+				continue
+			}
+			if owner, clash := skillNames[p.name]; clash {
+				r.warnf("%s: skipped prompt %q of %s: a skill of that name is provided by %q", tname, p.name, p.registry, owner)
+				continue
+			}
+			set := [][2]string{{"name", p.name}}
+			if p.doc.Field("disable-model-invocation") == "" {
+				// A prompt is something the user runs, not something the
+				// model picks up on its own.
+				set = append(set, [2]string{"disable-model-invocation", "true"})
+			}
+			content, err := target.RenderDoc(tname, p.doc.Front, p.doc.Body, set)
+			if err != nil {
+				r.warnf("%s: skipped prompt %q of %s: %v", tname, p.name, p.registry, err)
+				continue
+			}
+			src := filepath.Join(staging, "prompt-"+tname+"-"+p.name)
+			if err := writeFile(filepath.Join(src, registry.SkillFile), content); err != nil {
+				return nil, err
+			}
+			hash, err := fsutil.HashDir(src)
+			if err != nil {
+				return nil, err
+			}
+			add(item{abs: place.Path, target: tname, kind: KindPrompt, name: p.name, registry: p.registry, commit: p.commit, hash: hash, dir: src})
+		}
+		if unsupported > 0 {
+			r.warnf("%s: skipped %d prompts: this tool only reads prompts from a project, use --project", tname, unsupported)
 		}
 	}
 

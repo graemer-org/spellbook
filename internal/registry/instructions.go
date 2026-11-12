@@ -89,18 +89,11 @@ func DiscoverInstructions(root string) ([]Instruction, []string, error) {
 
 func parseInstruction(name, text string) (Instruction, error) {
 	ins := Instruction{Name: name}
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	body := text
-	if rest, ok := strings.CutPrefix(text, "---\n"); ok {
-		front, after, found := strings.Cut(rest, "\n---\n")
-		if !found {
-			if f, ok := strings.CutSuffix(rest, "\n---"); ok {
-				front, after, found = f, "", true
-			}
-		}
-		if !found {
-			return ins, fmt.Errorf("the frontmatter is not closed with '---'")
-		}
+	front, body, has, err := splitFrontmatter(text)
+	if err != nil {
+		return ins, err
+	}
+	if has {
 		var meta struct {
 			Description string    `yaml:"description"`
 			Paths       yaml.Node `yaml:"paths"`
@@ -125,7 +118,6 @@ func parseInstruction(name, text string) (Instruction, error) {
 		default:
 			return ins, fmt.Errorf("paths must be a list of globs or a comma-separated string")
 		}
-		body = after
 	}
 	ins.Body = strings.Trim(body, "\n") + "\n"
 	if strings.TrimSpace(ins.Body) == "" {

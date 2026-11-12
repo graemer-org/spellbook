@@ -813,3 +813,134 @@ func TestDiffListsChangedInstructions(t *testing.T) {
 		t.Errorf("diff does not list the changed instruction:\n%s", out)
 	}
 }
+
+// agentRepo is a registry with one agent and one prompt.
+func (e *env) agentRepo() string {
+	e.t.Helper()
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(e.t, filepath.Join(repo, "agents", "reviewer.md"), `---
+description: Reviews pull requests
+tools: Read, Grep
+custom-field: kept
+claude:
+  model: opus
+copilot:
+  model: gpt-5
+  target: github-copilot
+---
+
+You review code. v1
+`)
+	write(e.t, filepath.Join(repo, "agents", "broken.md"), "No frontmatter, so no description.\n")
+	write(e.t, filepath.Join(repo, "prompts", "release-notes.md"), `---
+description: Draft release notes
+claude:
+  argument-hint: "[version]"
+---
+
+Write release notes for $ARGUMENTS.
+`)
+	e.commit(repo, "agents and prompts")
+	return repo
+}
+
+func TestAgentsAreTranslatedForEachTool(t *testing.T) {
+	e := newEnv(t)
+	repo := e.agentRepo()
+	e.mustRun("init")
+	out := e.mustRun("registry", "add", "acme", repo, "--prefix", "all")
+	if !strings.Contains(out, "1 agents, 1 prompts") {
+		t.Errorf("summary does not count agents and prompts:\n%s", out)
+	}
+	if !strings.Contains(out, "agents/broken.md") || !strings.Contains(out, "description") {
+		t.Errorf("an agent without description should be skipped with a reason:\n%s", out)
+	}
+
+	claude := read(t, filepath.Join(e.home, ".claude", "agents", "acme-reviewer.md"))
+	for _, want := range []string{"name: acme-reviewer\n", "description: Reviews pull requests\n", "tools: Read, Grep\n", "custom-field: kept\n", "model: opus\n", "You review code. v1"} {
+		if !strings.Contains(claude, want) {
+			t.Errorf("Claude agent misses %q:\n%s", want, claude)
+		}
+	}
+	for _, not := range []string{"gpt-5", "copilot:", "claude:", "target:"} {
+		if strings.Contains(claude, not) {
+			t.Errorf("Claude agent contains %q, which is for another tool:\n%s", not, claude)
+		}
+	}
+
+	copilot := read(t, filepath.Join(e.home, ".copilot", "agents", "acme-reviewer.agent.md"))
+	for _, want := range []string{"name: acme-reviewer\n", "model: gpt-5\n", "target: github-copilot\n", "custom-field: kept\n"} {
+		if !strings.Contains(copilot, want) {
+			t.Errorf("Copilot agent misses %q:\n%s", want, copilot)
+		}
+	}
+	if strings.Contains(copilot, "opus") {
+		t.Errorf("Copilot agent contains Claude's model:\n%s", copilot)
+	}
+
+	if out := e.mustRun("sync"); strings.Contains(out, " 1 updated") || strings.Contains(out, " 1 installed") {
+		t.Errorf("second sync is not a no-op:\n%s", out)
+	}
+}
+
+func TestPromptsBecomeASkillForClaudeAndAPromptFileForCopilot(t *testing.T) {
+	e := newEnv(t)
+	repo := e.agentRepo()
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+
+	skill := read(t, filepath.Join(project, ".claude", "skills", "release-notes", "SKILL.md"))
+	for _, want := range []string{"name: release-notes\n", "disable-model-invocation: true\n", "description: Draft release notes\n", "argument-hint:", "Write release notes for $ARGUMENTS."} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("Claude prompt skill misses %q:\n%s", want, skill)
+		}
+	}
+	prompt := read(t, filepath.Join(project, ".github", "prompts", "release-notes.prompt.md"))
+	if !strings.Contains(prompt, "description: Draft release notes\n") || strings.Contains(prompt, "argument-hint") || strings.Contains(prompt, "name:") {
+		t.Errorf("Copilot prompt file is wrong:\n%s", prompt)
+	}
+	if !exists(filepath.Join(project, ".github", "agents", "reviewer.agent.md")) || !exists(filepath.Join(project, ".claude", "agents", "reviewer.md")) {
+		t.Error("project agents are missing")
+	}
+
+	// Upstream removes the prompt: both copies go.
+	if err := os.RemoveAll(filepath.Join(repo, "prompts")); err != nil {
+		t.Fatal(err)
+	}
+	e.commit(repo, "drop prompt")
+	e.mustRun("sync", "-p")
+	if exists(filepath.Join(project, ".claude", "skills", "release-notes")) || exists(filepath.Join(project, ".github", "prompts", "release-notes.prompt.md")) {
+		t.Error("removed prompt is still installed")
+	}
+}
+
+func TestCopilotPromptsAreSkippedAtHomeWithAWarning(t *testing.T) {
+	e := newEnv(t)
+	repo := e.agentRepo()
+	e.mustRun("init")
+	out := e.mustRun("registry", "add", "acme", repo)
+	if !strings.Contains(out, "copilot: skipped 1 prompts") {
+		t.Errorf("no warning that Copilot has no user-level prompts:\n%s", out)
+	}
+	if !exists(filepath.Join(e.home, ".claude", "skills", "release-notes", "SKILL.md")) {
+		t.Error("Claude should still get the prompt")
+	}
+}
+
+func TestGroupsSelectAgentsAndPrompts(t *testing.T) {
+	e := newEnv(t)
+	repo := e.agentRepo()
+	write(t, filepath.Join(repo, "registry.toml"), "version = 1\n[groups.reviewers]\nagents = [\"reviewer\"]\n[groups.writers]\nprompts = [\"release-notes\"]\n")
+	e.commit(repo, "manifest")
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--group", "reviewers")
+
+	if !exists(filepath.Join(e.home, ".claude", "agents", "reviewer.md")) {
+		t.Error("the agent of the joined group is missing")
+	}
+	if exists(filepath.Join(e.home, ".claude", "skills")) {
+		t.Error("skills and prompts outside the joined group were installed")
+	}
+}

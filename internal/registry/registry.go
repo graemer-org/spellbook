@@ -46,7 +46,12 @@ type Snapshot struct {
 	// ones in the order they should be read in.
 	AllInstructions []Instruction
 	Instructions    []Instruction
-	Warnings        []string
+	// Agents and Prompts follow the same pattern.
+	AllAgents  []Doc
+	Agents     []Doc
+	AllPrompts []Doc
+	Prompts    []Doc
+	Warnings   []string
 }
 
 // CacheRoot returns the directory registry checkouts are kept in.
@@ -106,7 +111,17 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 	}
 	warnings = append(warnings, iwarn...)
 
-	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all, AllInstructions: instructions}
+	agents, awarn, err := DiscoverAgents(root)
+	if err != nil {
+		return nil, err
+	}
+	prompts, pwarn, err := DiscoverPrompts(root)
+	if err != nil {
+		return nil, err
+	}
+	warnings = append(append(warnings, awarn...), pwarn...)
+
+	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all, AllInstructions: instructions, AllAgents: agents, AllPrompts: prompts}
 	groups := r.Groups
 	if len(groups) > 0 && manifest == nil {
 		return nil, fmt.Errorf("groups are configured, but the registry has no %s", ManifestFile)
@@ -138,6 +153,27 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 				return nil, err
 			}
 			snap.Instructions, warnings = pick(instructions, names, func(i Instruction) string { return i.Name }, warnings, "a group lists instruction %q, which is not in the registry")
+		}
+	}
+	docName := func(d Doc) string { return d.Name }
+	if r.Wants(config.KindAgents) {
+		snap.Agents = agents
+		if len(groups) > 0 {
+			names, err := manifest.Agents(groups)
+			if err != nil {
+				return nil, err
+			}
+			snap.Agents, warnings = pick(agents, names, docName, warnings, "a group lists agent %q, which is not in the registry")
+		}
+	}
+	if r.Wants(config.KindPrompts) {
+		snap.Prompts = prompts
+		if len(groups) > 0 {
+			names, err := manifest.Prompts(groups)
+			if err != nil {
+				return nil, err
+			}
+			snap.Prompts, warnings = pick(prompts, names, docName, warnings, "a group lists prompt %q, which is not in the registry")
 		}
 	}
 	snap.Warnings = warnings

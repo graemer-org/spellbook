@@ -56,6 +56,9 @@ go vet ./... && gofmt -l .    # must be clean before committing
   file, and there only the text between `spellbook:begin` and
   `spellbook:end` markers may change. A block that is not in the state file
   is left alone.
+- **Frontmatter of agents and prompts is passed through.** Do not drop
+  fields Spellbook does not know. Only the `claude:` and `copilot:` sections
+  are interpreted, and `name` is set to the installed name.
 - **Syncing twice changes nothing.** The second run must report everything
   as unchanged and must not rewrite any file.
 - **`diff` changes nothing.** It never writes to targets, state or lock.
@@ -79,7 +82,7 @@ in a temporary home. Add a test there for every user-visible behaviour.
    for collisions, lockfile, `diff` (done)
 3. Instructions: rule files for Claude Code, managed blocks in
    `copilot-instructions.md`, layering, path-scoped instruction files (done)
-4. Agents and prompts, with frontmatter translation per target
+4. Agents and prompts, with frontmatter translation per target (done)
 5. Automatic sync, `sync --check` for CI, `doctor`
 6. MCP servers and hooks, allowed per registry
 7. Installation with Homebrew through a tap

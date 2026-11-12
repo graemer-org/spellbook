@@ -166,7 +166,7 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Added registry %s (%d skills, %d instructions at %s)\n", reg.Name, len(snap.Skills), len(snap.Instructions), short(snap.Commit))
+			fmt.Fprintf(out, "Added registry %s (%d skills, %d instructions, %d agents, %d prompts at %s)\n", reg.Name, len(snap.Skills), len(snap.Instructions), len(snap.Agents), len(snap.Prompts), short(snap.Commit))
 			if noSync {
 				return nil
 			}
@@ -178,7 +178,7 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	add.Flags().IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
 	add.Flags().StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
 	add.Flags().StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
-	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions; repeatable")
+	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions, agents, prompts; repeatable")
 	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of installed names: 'all', or 'collisions' for taken names only")
 	add.Flags().BoolVar(&noSync, "no-sync", false, "add the registry without syncing")
 
@@ -360,7 +360,7 @@ func newGroup(locate func() (config.Location, error)) *cobra.Command {
 				joined[g] = true
 			}
 			w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "GROUP\tJOINED\tINCLUDES\tSKILLS\tINSTRUCTIONS\tDESCRIPTION")
+			fmt.Fprintln(w, "GROUP\tJOINED\tINCLUDES\tSKILLS\tINSTRUCTIONS\tAGENTS\tPROMPTS\tDESCRIPTION")
 			for _, name := range snap.Manifest.GroupNames() {
 				g := snap.Manifest.Groups[name]
 				state := "-"
@@ -378,7 +378,15 @@ func newGroup(locate func() (config.Location, error)) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n", name, state, dash(strings.Join(g.Include, ",")), len(skills), len(instructions), dash(g.Description))
+				agents, err := snap.Manifest.Agents([]string{name})
+				if err != nil {
+					return err
+				}
+				prompts, err := snap.Manifest.Prompts([]string{name})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%d\t%d\t%s\n", name, state, dash(strings.Join(g.Include, ",")), len(skills), len(instructions), len(agents), len(prompts), dash(g.Description))
 			}
 			return w.Flush()
 		},
@@ -587,7 +595,7 @@ func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts s
 		if r.Previous != "" && r.Previous != r.Commit {
 			was = fmt.Sprintf(" (was %s)", short(r.Previous))
 		}
-		fmt.Fprintf(out, "%-12s %d skills, %d instructions at %s%s\n", r.Name, r.Skills, r.Instructions, short(r.Commit), was)
+		fmt.Fprintf(out, "%-12s %d skills, %d instructions, %d agents, %d prompts at %s%s\n", r.Name, r.Skills, r.Instructions, r.Agents, r.Prompts, short(r.Commit), was)
 	}
 	names := make([]string, 0, len(rep.Targets))
 	for n := range rep.Targets {

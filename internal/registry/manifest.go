@@ -25,6 +25,8 @@ type Group struct {
 	Skills  []string `toml:"skills,omitempty"`
 	// Instructions are listed in the order they should be read in.
 	Instructions []string `toml:"instructions,omitempty"`
+	Agents       []string `toml:"agents,omitempty"`
+	Prompts      []string `toml:"prompts,omitempty"`
 }
 
 // Manifest is the content of a registry.toml file.
@@ -105,6 +107,16 @@ func (m *Manifest) Skills(groups []string) ([]string, error) {
 // guidance of a base group precedes a team's own.
 func (m *Manifest) Instructions(groups []string) ([]string, error) {
 	return m.resolve(groups, func(g Group) []string { return g.Instructions })
+}
+
+// Agents returns the agent names of the given groups.
+func (m *Manifest) Agents(groups []string) ([]string, error) {
+	return m.resolve(groups, func(g Group) []string { return g.Agents })
+}
+
+// Prompts returns the prompt names of the given groups.
+func (m *Manifest) Prompts(groups []string) ([]string, error) {
+	return m.resolve(groups, func(g Group) []string { return g.Prompts })
 }
 
 func (m *Manifest) resolve(groups []string, field func(Group) []string) ([]string, error) {
