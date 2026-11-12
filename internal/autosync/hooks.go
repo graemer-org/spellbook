@@ -34,6 +34,8 @@ func HookFile(target string, loc config.Location) (string, error) {
 			return filepath.Join(loc.Root, ".github", "hooks", "spellbook.json"), nil
 		}
 		return filepath.Join(loc.Root, ".copilot", "hooks", "spellbook.json"), nil
+	case "cursor":
+		return filepath.Join(loc.Root, ".cursor", "hooks.json"), nil
 	}
 	return "", ErrUnsupported
 }
@@ -65,6 +67,8 @@ func Enable(target string, loc config.Location) error {
 		return err
 	}
 	switch target {
+	case "cursor":
+		return enableCursor(path, loc)
 	case "copilot":
 		// Copilot reads every JSON file in its hooks directory, so the hook
 		// gets a file of its own. The command goes to the background
@@ -116,6 +120,9 @@ func Disable(target string, loc config.Location) error {
 	}
 	if target == "copilot" {
 		return os.Remove(path)
+	}
+	if target == "cursor" {
+		return disableCursor(path)
 	}
 	return editClaudeSettings(path, func(entries []json.RawMessage) ([]json.RawMessage, error) {
 		return withoutOurs(entries), nil

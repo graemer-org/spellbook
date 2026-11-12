@@ -127,7 +127,7 @@ func newInit(project *bool) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&targets, "target", nil, "target to enable (claude, copilot); repeatable")
+	cmd.Flags().StringSliceVar(&targets, "target", nil, "target to enable ("+strings.Join(target.Names(), ", ")+"); repeatable")
 	return cmd
 }
 

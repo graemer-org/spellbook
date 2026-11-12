@@ -390,12 +390,17 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			if !h.hook.For(tname) {
 				continue
 			}
-			if loc.Scope == config.ScopeProject && slices.ContainsFunc(target.ReadsProjectHooksOf(tname), func(other string) bool {
+			if slices.ContainsFunc(target.ReadsHooksOf(tname, loc), func(other string) bool {
 				return slices.Contains(enabled, other) && h.hook.For(other)
 			}) {
-				// In a project this tool also runs the hooks in another
-				// tool's file, where this hook is written already. A second
-				// entry would run it twice.
+				// This tool also runs the hooks in another tool's file,
+				// where this hook is written already. A second entry would
+				// run it twice.
+				continue
+			}
+			event, ok := target.HookEvent(tname, h.hook.Event)
+			if !ok {
+				r.warnf("%s: skipped hook %q of %s: the tool has no %s event", tname, h.name, h.registry, h.hook.Event)
 				continue
 			}
 			place, err := target.HookFor(tname, loc)
@@ -421,7 +426,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			if err != nil {
 				return nil, err
 			}
-			wantHooks[place] = append(wantHooks[place], hookWant{id: id, name: h.name, target: tname, registry: h.registry, commit: h.commit, event: h.hook.Event, entry: entry})
+			wantHooks[place] = append(wantHooks[place], hookWant{id: id, name: h.name, target: tname, registry: h.registry, commit: h.commit, event: event, entry: entry})
 		}
 		for _, p := range prompts {
 			place, err := target.PromptFor(tname, cfg.Targets[tname], loc, p.name)

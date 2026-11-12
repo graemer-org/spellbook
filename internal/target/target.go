@@ -60,6 +60,9 @@ type HookPlace struct {
 	// Owned is true when the file belongs to Spellbook alone. Otherwise it
 	// is the tool's settings file and holds much more than hooks.
 	Owned bool
+	// Version is true when the file needs a top-level "version" although
+	// it is not Spellbook's alone.
+	Version bool
 }
 
 // Spec describes one tool. A nil function, or an empty skills directory,
@@ -96,10 +99,16 @@ type Spec struct {
 	// tool's form. The command already carries the marker.
 	Hooks     func(loc config.Location) (HookPlace, bool)
 	HookEntry func(command, matcher string, timeout int) map[string]any
+	// HookEvent returns the tool's name for one of Claude Code's events,
+	// or false when the tool has no such event. Nil means the tool uses
+	// Claude Code's names.
+	HookEvent func(event string) (string, bool)
 	// ReadsProjectHooksOf names tools whose project hooks file this tool
 	// reads as well. A hook written there is not written again for this
 	// tool, so it does not run twice.
 	ReadsProjectHooksOf []string
+	// ReadsHomeHooksOf is the same for the user-level hooks file.
+	ReadsHomeHooksOf []string
 }
 
 var specs = map[string]Spec{}
@@ -137,10 +146,22 @@ func Known(name string) bool {
 	return ok
 }
 
-// ReadsProjectHooksOf returns the tools whose project hooks file the named
-// tool reads in addition to its own.
-func ReadsProjectHooksOf(name string) []string {
-	return specs[name].ReadsProjectHooksOf
+// ReadsHooksOf returns the tools whose hooks file in the given scope the
+// named tool reads in addition to its own.
+func ReadsHooksOf(name string, loc config.Location) []string {
+	if loc.Scope == config.ScopeProject {
+		return specs[name].ReadsProjectHooksOf
+	}
+	return specs[name].ReadsHomeHooksOf
+}
+
+// HookEvent returns the name the target uses for one of Claude Code's
+// events, or false when it has no such event.
+func HookEvent(name, event string) (string, bool) {
+	if s, ok := specs[name]; ok && s.HookEvent != nil {
+		return s.HookEvent(event)
+	}
+	return event, true
 }
 
 // SkillsDir returns the absolute directory skills are written to for the
