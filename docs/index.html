@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spellbook: shared spells for Claude Code and GitHub Copilot</title>
+<meta name="description" content="Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in git. Spellbook installs them into Claude Code and GitHub Copilot and keeps them up to date.">
+<meta property="og:title" content="Spellbook">
+<meta property="og:description" content="Shared spells for Claude Code and GitHub Copilot. Write your AI tooling once in git, sync it to everyone.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 18C24 14 13 14 5 17v32c8-3 19-3 27 1 8-4 19-4 27-1V17c-8-3-19-3-27 1z' fill='%235b21b6'/%3E%3Cpath d='M32 15C25 11 15 11 8 14v30c7-3 17-3 24 1z' fill='%23faf5ff'/%3E%3Cpath d='M32 15c7-4 17-4 24-1v30c-7-3-17-3-24 1z' fill='%23f3e8ff'/%3E%3Cpath d='M40 42v16l4-4 4 4V43z' fill='%23f59e0b'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #fbfaff;
+    --surface: #ffffff;
+    --surface-2: #f4f0ff;
+    --text: #1c1730;
+    --muted: #5d5873;
+    --line: #e4dcfb;
+    --brand: #6d3fe0;
+    --brand-strong: #5b21b6;
+    --gold: #b45309;
+    --code-bg: #1a1530;
+    --code-text: #ece8ff;
+    --code-dim: #9a92c0;
+    --code-gold: #fbbf24;
+    --ok: #15803d;
+    --shadow: 0 1px 2px rgba(40, 20, 90, .06), 0 8px 24px rgba(40, 20, 90, .07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e0b1a;
+      --surface: #171329;
+      --surface-2: #1e1936;
+      --text: #f1eeff;
+      --muted: #a8a1c6;
+      --line: #2c2550;
+      --brand: #a78bfa;
+      --brand-strong: #8b5cf6;
+      --gold: #fbbf24;
+      --code-bg: #0a0814;
+      --ok: #4ade80;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 10px 30px rgba(0, 0, 0, .35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--brand); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+  a:hover { text-decoration-thickness: 2px; }
+  code, pre, kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  p code, li code, td code {
+    font-size: .88em;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 1px 6px;
+    white-space: nowrap;
+  }
+  h1, h2, h3 { line-height: 1.15; margin: 0; text-wrap: balance; }
+  h1, h2 { font-family: Georgia, "Times New Roman", serif; letter-spacing: -.01em; }
+  h1 { font-size: clamp(2.3rem, 5.4vw, 3.9rem); }
+  h2 { font-size: clamp(1.75rem, 3.4vw, 2.5rem); }
+  h3 { font-size: 1.12rem; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  section { padding: 76px 0; }
+  .lede { color: var(--muted); font-size: 1.14rem; max-width: 62ch; }
+  .eyebrow {
+    font-size: .8rem; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--gold); margin: 0 0 12px;
+  }
+  .section-head { margin-bottom: 40px; }
+  .section-head p { margin: 14px 0 0; }
+
+  /* Navigation */
+  header.nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .nav .wrap { display: flex; align-items: center; gap: 22px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font: 700 1.2rem Georgia, serif; color: var(--text); text-decoration: none; margin-right: auto; }
+  .brand svg { width: 30px; height: 30px; }
+  .nav a.link { color: var(--muted); text-decoration: none; font-size: .95rem; }
+  .nav a.link:hover { color: var(--text); }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 18px; border-radius: 10px; font-weight: 600; font-size: .98rem;
+    text-decoration: none; border: 1px solid transparent; cursor: pointer;
+  }
+  .btn.primary { background: var(--brand-strong); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .btn.ghost { border-color: var(--line); color: var(--text); background: var(--surface); }
+  .btn.ghost:hover { border-color: var(--brand); }
+  .nav .btn { padding: 7px 14px; font-size: .9rem; }
+  @media (max-width: 720px) { .nav a.link { display: none; } }
+
+  /* Hero */
+  .hero { padding: 64px 0 56px; overflow: hidden; }
+  .hero .wrap { display: grid; grid-template-columns: 1.15fr .85fr; gap: 32px; align-items: center; }
+  .hero h1 em { font-style: normal; color: var(--brand); }
+  .hero .lede { margin: 22px 0 30px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+  .hero-art { display: flex; justify-content: center; }
+  .hero-art svg { width: min(100%, 430px); height: auto; overflow: visible; }
+  @media (max-width: 860px) {
+    .hero .wrap { grid-template-columns: 1fr; }
+    .hero-art { order: -1; }
+    .hero-art svg { width: min(74%, 300px); }
+  }
+
+  /* Logo animation */
+  .book   { animation: bob 4s ease-in-out infinite; }
+  .glow   { animation: glow 4s ease-in-out infinite; transform-origin: 170px 150px; }
+  .spark  { animation: twinkle 2.4s ease-in-out infinite; transform-origin: 0 0; }
+  .rise   { animation: rise 5s ease-out infinite; opacity: 0; }
+  .d1 { animation-delay: -.6s; } .d2 { animation-delay: -1.3s; } .d3 { animation-delay: -1.9s; }
+  .r1 { animation-delay: -1.25s; } .r2 { animation-delay: -2.5s; } .r3 { animation-delay: -3.75s; }
+  .glyph { font: 700 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #f59e0b; text-anchor: middle; }
+  .ink { stroke: #c4b5fd; stroke-width: 3; stroke-linecap: round; fill: none; }
+  @keyframes bob     { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+  @keyframes glow    { 0%, 100% { opacity: .25; transform: scale(.92); } 50% { opacity: .5; transform: scale(1.05); } }
+  @keyframes twinkle { 0%, 100% { opacity: .15; transform: scale(.5) rotate(0deg); } 50% { opacity: 1; transform: scale(1) rotate(45deg); } }
+  @keyframes rise    { 0% { opacity: 0; transform: translateY(0); } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(-92px); } }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .book, .glow, .spark, .rise { animation: none; }
+    .rise { opacity: 1; }
+  }
+
+  /* Code */
+  .term {
+    background: var(--code-bg); color: var(--code-text);
+    border-radius: 14px; box-shadow: var(--shadow); overflow: hidden;
+    border: 1px solid color-mix(in srgb, var(--brand) 25%, transparent);
+  }
+  .term-bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid rgba(255, 255, 255, .07); }
+  .term-bar i { width: 11px; height: 11px; border-radius: 50%; background: #4a4370; }
+  .term-bar span { margin-left: 8px; font: 500 .8rem ui-monospace, Menlo, monospace; color: var(--code-dim); }
+  .copy {
+    margin-left: auto; background: transparent; color: var(--code-dim);
+    border: 1px solid rgba(255, 255, 255, .16); border-radius: 7px;
+    font: 600 .76rem -apple-system, "Segoe UI", sans-serif; padding: 4px 10px; cursor: pointer;
+  }
+  .copy:hover { color: #fff; border-color: rgba(255, 255, 255, .4); }
+  pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: .88rem; line-height: 1.75; }
+  pre .c { color: var(--code-dim); }
+  pre .p { color: var(--code-gold); user-select: none; }
+  pre .o { color: #86efac; }
+
+  /* Steps */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; counter-reset: step; }
+  .step { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 26px; box-shadow: var(--shadow); }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+    background: var(--surface-2); color: var(--brand); font-weight: 700; margin-bottom: 16px;
+    border: 1px solid var(--line);
+  }
+  .step p { color: var(--muted); margin: 10px 0 0; font-size: .98rem; }
+  @media (max-width: 860px) { .steps { grid-template-columns: 1fr; } }
+
+  /* Kinds */
+  .band { background: var(--surface-2); border-block: 1px solid var(--line); }
+  .kinds { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .kind { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+  .kind .glyph-box {
+    font: 700 1rem ui-monospace, Menlo, monospace; color: var(--gold);
+    background: var(--surface-2); border: 1px solid var(--line);
+    display: inline-grid; place-items: center; min-width: 44px; height: 36px; padding: 0 9px; border-radius: 9px; margin-bottom: 14px;
+  }
+  .kind p { color: var(--muted); margin: 8px 0 0; font-size: .95rem; }
+  .kind .tools { margin-top: 14px; font-size: .8rem; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--bg); }
+  .pill.ok::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+  @media (max-width: 860px) { .kinds { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 560px) { .kinds { grid-template-columns: 1fr; } }
+
+  /* Use cases */
+  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 22px; }
+  .tab {
+    font: inherit; font-weight: 600; font-size: .98rem; cursor: pointer;
+    padding: 10px 18px; border-radius: 999px;
+    background: var(--surface); color: var(--muted); border: 1px solid var(--line);
+  }
+  .tab[aria-selected="true"] { background: var(--brand-strong); color: #fff; border-color: var(--brand-strong); }
+  .tab:focus-visible, .btn:focus-visible, .copy:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+  .panel { display: grid; grid-template-columns: .9fr 1.1fr; gap: 32px; align-items: start; }
+  .panel[hidden] { display: none; }
+  .panel h3 { font: 700 1.5rem Georgia, serif; }
+  .panel > div > p { color: var(--muted); }
+  .panel ul { padding-left: 20px; color: var(--muted); margin: 14px 0 0; }
+  .panel li { margin: 7px 0; }
+  .panel li strong { color: var(--text); }
+  .panel .term { min-width: 0; }
+  @media (max-width: 860px) { .panel { grid-template-columns: 1fr; } }
+  /* Without JavaScript every panel is shown, each under its own heading. */
+  .no-js .tabs { display: none; }
+  .no-js .panel[hidden] { display: grid; margin-top: 40px; }
+
+  /* Safety */
+  .safe { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px 36px; }
+  .safe div { border-top: 2px solid var(--brand); padding-top: 16px; }
+  .safe p { color: var(--muted); margin: 8px 0 0; font-size: .98rem; }
+  @media (max-width: 720px) { .safe { grid-template-columns: 1fr; } }
+
+  /* Closing */
+  .cta { text-align: center; }
+  .cta .lede { margin: 16px auto 28px; }
+  .cta .actions { justify-content: center; }
+  footer { border-top: 1px solid var(--line); padding: 28px 0 44px; color: var(--muted); font-size: .9rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 22px; justify-content: space-between; }
+  footer nav { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+</style>
+</head>
+<body class="no-js">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <radialGradient id="aura" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#f59e0b" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <path id="star" d="M0 -9 L2.2 -2.2 L9 0 L2.2 2.2 L0 9 L-2.2 2.2 L-9 0 L-2.2 -2.2 Z"/>
+  </defs>
+</svg>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Spellbook, to the top">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M32 18C24 14 13 14 5 17v32c8-3 19-3 27 1 8-4 19-4 27-1V17c-8-3-19-3-27 1z" fill="#5b21b6"/>
+        <path d="M32 15C25 11 15 11 8 14v30c7-3 17-3 24 1z" fill="#faf5ff"/>
+        <path d="M32 15c7-4 17-4 24-1v30c-7-3-17-3-24 1z" fill="#f3e8ff"/>
+        <path d="M40 42v16l4-4 4 4V43z" fill="#f59e0b"/>
+      </svg>
+      Spellbook
+    </a>
+    <a class="link" href="#how">How it works</a>
+    <a class="link" href="#kinds">What it syncs</a>
+    <a class="link" href="#use">Use cases</a>
+    <a class="link" href="https://github.com/graemer-org/spellbook#readme">Docs</a>
+    <a class="btn ghost" href="https://github.com/graemer-org/spellbook">GitHub</a>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="wrap">
+    <div>
+      <p class="eyebrow">Open source · Apache-2.0</p>
+      <h1>Shared spells for <em>Claude Code</em> and <em>GitHub Copilot</em></h1>
+      <p class="lede">Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in a git repository. Spellbook installs them into both tools and keeps everyone up to date.</p>
+      <div class="actions">
+        <a class="btn primary" href="#install">Install</a>
+        <a class="btn ghost" href="https://github.com/graemer-org/spellbook#readme">Read the docs</a>
+      </div>
+    </div>
+    <div class="hero-art">
+      <svg viewBox="20 10 300 230" role="img" aria-label="An open spell book. Sparkles twinkle above it and small glyphs rise from its pages.">
+        <ellipse class="glow" cx="170" cy="150" rx="150" ry="100" fill="url(#aura)"/>
+        <g class="rise"><text class="glyph" x="118" y="112">{ }</text></g>
+        <g class="rise r1"><text class="glyph" x="216" y="118">&gt;_</text></g>
+        <g class="rise r2"><text class="glyph" x="150" y="104">#</text></g>
+        <g class="rise r3"><text class="glyph" x="190" y="108">@</text></g>
+        <g class="book">
+          <path d="M170 116 C138 102 92 102 58 113 L58 200 C92 189 138 189 170 203 C202 189 248 189 282 200 L282 113 C248 102 202 102 170 116 Z" fill="#5b21b6"/>
+          <path d="M170 108 C140 95 98 95 66 105 L66 190 C98 180 140 180 170 193 Z" fill="#faf5ff"/>
+          <path d="M170 108 C200 95 242 95 274 105 L274 190 C242 180 200 180 170 193 Z" fill="#f3e8ff"/>
+          <path d="M170 108 L170 193" stroke="#a78bfa" stroke-width="2"/>
+          <path class="ink" d="M84 122 C104 116 130 116 152 122 M84 138 C104 132 130 132 152 138 M84 154 C100 149 118 148 134 151"/>
+          <path class="ink" d="M188 122 C210 116 236 116 256 122 M188 138 C210 132 236 132 256 138"/>
+          <use href="#star" x="222" y="162" fill="#f59e0b"/>
+          <path d="M196 186 L196 222 L204 214 L212 222 L212 189 Z" fill="#f59e0b"/>
+        </g>
+        <g transform="translate(70 62)"><use class="spark" href="#star" fill="#f59e0b"/></g>
+        <g transform="translate(262 56)"><use class="spark d1" href="#star" fill="#a78bfa"/></g>
+        <g transform="translate(168 34)"><use class="spark d2" href="#star" fill="#f59e0b"/></g>
+        <g transform="translate(300 150)"><use class="spark d3" href="#star" fill="#f59e0b"/></g>
+        <g transform="translate(36 148)"><use class="spark d2" href="#star" fill="#a78bfa"/></g>
+      </svg>
+    </div>
+  </div>
+</section>
+
+<section id="install" style="padding-top:0">
+  <div class="wrap">
+    <div class="term">
+      <div class="term-bar"><i></i><i></i><i></i><span>install and subscribe</span><button class="copy" type="button" data-copy="install-code">Copy</button></div>
+<pre id="install-code"><span class="c"># macOS and Linux</span>
+<span class="p">$ </span>brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
+<span class="p">$ </span>brew install spellbook
+
+<span class="p">$ </span>spellbook init
+<span class="p">$ </span>spellbook registry add acme git@github.com:acme/ai-registry.git
+<span class="o">acme         4 skills, 2 instructions, 1 agents, 0 prompts, 0 MCP servers, 0 hooks at 1a2b3c4
+claude       7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped
+copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></pre>
+    </div>
+    <p class="lede" style="margin-top:18px;font-size:1rem;max-width:none">No Homebrew? Use <code>go install github.com/graemer-org/spellbook/cmd/spellbook@latest</code> or grab an archive from the <a href="https://github.com/graemer-org/spellbook/releases">releases page</a>.</p>
+  </div>
+</section>
+
+<section id="how" class="band">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">How it works</p>
+      <h2>Write it once. Everyone gets it.</h2>
+      <p class="lede">Your AI tooling lives in a normal git repository, the registry. Spellbook is the small command line tool that carries it to where each agent looks.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <h3>Put your spells in a repository</h3>
+        <p>A folder with a <code>SKILL.md</code> is a skill. A Markdown file in <code>instructions/</code> is an instruction. Agents, prompts, MCP servers and hooks work the same way.</p>
+      </div>
+      <div class="step">
+        <h3>Subscribe</h3>
+        <p><code>spellbook registry add</code> fetches the repository and writes every resource in the format Claude Code and Copilot each expect.</p>
+      </div>
+      <div class="step">
+        <h3>Stay in sync</h3>
+        <p><code>spellbook sync</code> installs what is new, updates what changed and removes what was deleted. With autosync it happens when a session starts.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="kinds">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">What it syncs</p>
+      <h2>Six kinds of spells, two tools</h2>
+      <p class="lede">Each one is written once and translated per tool: file locations, frontmatter, even the model an agent uses.</p>
+    </div>
+    <div class="kinds">
+      <div class="kind"><span class="glyph-box">{ }</span><h3>Skills</h3><p>Instructions and scripts the agent loads when a task calls for them.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
+      <div class="kind"><span class="glyph-box">#</span><h3>Instructions</h3><p>Standing guidance, always on or limited to certain files. Layered from company to team.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
+      <div class="kind"><span class="glyph-box">@</span><h3>Agents</h3><p>Specialists with their own prompt, tools and model, with per-tool settings where they differ.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
+      <div class="kind"><span class="glyph-box">&gt;_</span><h3>Prompts</h3><p>Reusable tasks you start yourself, such as drafting release notes.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot, in projects</span></div></div>
+      <div class="kind"><span class="glyph-box">⇄</span><h3>MCP servers</h3><p>Connections to external tools and data. Installed only after you allow the registry to.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
+      <div class="kind"><span class="glyph-box">!</span><h3>Hooks</h3><p>Commands that run when something happens in a session. Also behind your permission.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="use" class="band">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Use cases</p>
+      <h2>From one laptop to a whole company</h2>
+    </div>
+
+    <div class="tabs" role="tablist" aria-label="Use cases">
+      <button class="tab" role="tab" id="tab-you" aria-controls="panel-you" aria-selected="true">For yourself</button>
+      <button class="tab" role="tab" id="tab-project" aria-controls="panel-project" aria-selected="false" tabindex="-1">In a project</button>
+      <button class="tab" role="tab" id="tab-org" aria-controls="panel-org" aria-selected="false" tabindex="-1">In an organization</button>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-you" aria-labelledby="tab-you">
+      <div>
+        <h3>The same spells on every machine</h3>
+        <p>Subscribe to public collections, keep your own in a private repository, and let both tools pick up changes on their own.</p>
+        <ul>
+          <li><strong>Pick what you want</strong> from any repository with <code>--skill</code>.</li>
+          <li><strong>Start your own registry</strong> with <code>registry setup</code>.</li>
+          <li><strong>Forget about it:</strong> autosync runs at most once a day, in the background.</li>
+        </ul>
+      </div>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>~</span></div>
+<pre><span class="p">$ </span>spellbook init
+<span class="p">$ </span>spellbook registry add anthropic \
+    https://github.com/anthropics/skills --skill pdf --skill docx
+
+<span class="c"># your own spells</span>
+<span class="p">$ </span>spellbook registry setup ~/code/my-spells
+<span class="p">$ </span>spellbook registry add mine git@github.com:you/my-spells.git
+
+<span class="p">$ </span>spellbook autosync enable</pre>
+      </div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-project" aria-labelledby="tab-project" hidden>
+      <div>
+        <h3>Tooling that travels with the repository</h3>
+        <p>Spellbook writes real files into the repository. Commit them, and teammates, cloud agents and GitHub workflows get the tooling with a plain <code>git pull</code>. Nobody else has to install anything.</p>
+        <ul>
+          <li><strong>Pinned:</strong> <code>spellbook.lock</code> records the exact commit of every registry.</li>
+          <li><strong>Reviewed:</strong> <code>diff</code> shows what an update would change before you take it.</li>
+          <li><strong>Guarded:</strong> <code>sync --check</code> fails CI when someone edits a synced file by hand.</li>
+        </ul>
+      </div>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>my-repo</span></div>
+<pre><span class="p">$ </span>spellbook init --project
+<span class="p">$ </span>spellbook registry add acme \
+    git@github.com:acme/ai-registry.git --project --group backend
+<span class="p">$ </span>git add spellbook.toml spellbook.lock .spellbook .claude .github
+<span class="p">$ </span>git commit -m "Add shared AI tooling"
+
+<span class="c"># later: review and take an update</span>
+<span class="p">$ </span>spellbook diff --project --patch
+<span class="p">$ </span>spellbook sync --project
+
+<span class="c"># in CI</span>
+<span class="p">$ </span>spellbook sync --project --check</pre>
+      </div>
+    </div>
+
+    <div class="panel" role="tabpanel" id="panel-org" aria-labelledby="tab-org" hidden>
+      <div>
+        <h3>Company standards, team tooling, reviewed like code</h3>
+        <p>One registry holds everything, sorted into groups. A team's group includes the company baseline, and people join the groups of the teams they work with.</p>
+        <ul>
+          <li><strong>Onboarding in three commands:</strong> install, subscribe, enable autosync.</li>
+          <li><strong>Change control you already have:</strong> pull requests, <code>CODEOWNERS</code>, a <code>stable</code> branch for staged rollouts.</li>
+          <li><strong>Layering:</strong> combine a company and a team registry with <code>--priority</code>.</li>
+          <li><strong>Access:</strong> whoever can clone the registry can subscribe. Nothing else to set up.</li>
+        </ul>
+      </div>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>registry.toml</span></div>
+<pre><span class="p">default_groups</span> = ["base"]
+
+[groups.base]
+<span class="p">instructions</span> = ["company-standards", "security-basics"]
+<span class="p">skills</span> = ["code-review", "commit-style"]
+
+[groups.platform]
+<span class="p">include</span> = ["base"]
+<span class="p">skills</span> = ["terraform-review"]
+<span class="p">agents</span> = ["infra-reviewer"]
+<span class="p">mcp</span> = ["internal-docs"]
+
+<span class="c"># on each machine</span>
+<span class="c"># $ spellbook group join acme platform</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="safe">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Careful by design</p>
+      <h2>It only touches what it installed</h2>
+      <p class="lede">A tool that writes into your agents' configuration has to be predictable. These rules hold for every command.</p>
+    </div>
+    <div class="safe">
+      <div><h3>Your own files stay yours</h3><p>A skill, rule or hook you created yourself is never overwritten or deleted, even when a registry offers one with the same name.</p></div>
+      <div><h3>Local edits are kept</h3><p>Something you changed after a sync is left alone, with a warning. Only <code>--force</code> overwrites it.</p></div>
+      <div><h3>Code needs your permission</h3><p>MCP servers and hooks run programs. A registry installs them only after <code>spellbook registry allow</code>.</p></div>
+      <div><h3>A failed fetch removes nothing</h3><p>When a registry cannot be reached, everything it installed stays in place and the command says so.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="band cta">
+  <div class="wrap">
+    <h2>Open the book</h2>
+    <p class="lede">Spellbook is free and open source under the Apache License 2.0. Issues and pull requests are welcome.</p>
+    <div class="actions">
+      <a class="btn primary" href="https://github.com/graemer-org/spellbook">View on GitHub</a>
+      <a class="btn ghost" href="https://github.com/graemer-org/spellbook#readme">Read the docs</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Spellbook · Apache-2.0</span>
+    <nav aria-label="Footer">
+      <a href="https://github.com/graemer-org/spellbook">GitHub</a>
+      <a href="https://github.com/graemer-org/spellbook/releases">Releases</a>
+      <a href="https://github.com/graemer-org/spellbook/blob/main/CONTRIBUTING.md">Contributing</a>
+      <a href="https://github.com/graemer-org/spellbook/blob/main/SECURITY.md">Security</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  document.body.classList.remove('no-js');
+
+  // Tabs: click or arrow keys.
+  const tabs = [...document.querySelectorAll('[role="tab"]')];
+  function select(tab, focus) {
+    tabs.forEach(t => {
+      const on = t === tab;
+      t.setAttribute('aria-selected', on);
+      t.tabIndex = on ? 0 : -1;
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    if (focus) tab.focus();
+  }
+  tabs.forEach((tab, i) => {
+    tab.addEventListener('click', () => select(tab));
+    tab.addEventListener('keydown', e => {
+      const step = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+      if (step) { e.preventDefault(); select(tabs[(i + step + tabs.length) % tabs.length], true); }
+    });
+  });
+
+  // Copy the commands of a code block, without prompts, comments and output.
+  document.querySelectorAll('.copy').forEach(button => {
+    button.addEventListener('click', async () => {
+      const pre = document.getElementById(button.dataset.copy).cloneNode(true);
+      pre.querySelectorAll('.p, .c, .o').forEach(n => n.remove());
+      const text = pre.textContent.split('\n').map(l => l.trimEnd()).filter(Boolean).join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        button.textContent = 'Copied';
+      } catch {
+        button.textContent = 'Select and copy';
+      }
+      setTimeout(() => { button.textContent = 'Copy'; }, 1800);
+    });
+  });
+</script>
+</body>
+</html>

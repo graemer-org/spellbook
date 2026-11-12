@@ -99,6 +99,11 @@ organization. `CONTRIBUTING.md` and `SECURITY.md` must stay in step with
 the commands and the permission model. The logo is the animated
 `assets/spellbook.svg`; it has to read well on a light and on a dark page.
 
+The website is the single file `docs/index.html`, served by GitHub Pages
+from the `docs` folder of `main` at https://graemer-org.github.io/spellbook/.
+It has no build step and no external resources. When a command or its
+output changes, update the examples on the page as well as the README.
+
 ## Testing
 
 Tests in `internal/cli` run the real command against local git repositories

@@ -8,6 +8,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
 </p>
 
+<p align="center">
+  <a href="https://graemer-org.github.io/spellbook/"><b>Website</b></a> ·
+  <a href="#use-it-for-yourself">For yourself</a> ·
+  <a href="#use-it-in-a-project">In a project</a> ·
+  <a href="#use-it-in-an-organization">In an organization</a>
+</p>
+
 Spellbook keeps your team's AI tooling in git and installs it into Claude
 Code and GitHub Copilot.
 
