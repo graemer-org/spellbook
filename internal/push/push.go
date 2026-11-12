@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
 
 	"github.com/graemer-org/spellbook/internal/config"
@@ -168,6 +169,9 @@ type Item struct {
 	// Remove then lists what is deleted before Files are written.
 	Update bool
 	Remove []string
+	// Lossy is true when the tool's form holds only part of what the
+	// registry holds, so an update must keep the rest from the registry.
+	Lossy bool
 }
 
 // Select picks the candidates the arguments name. An argument is a path,
@@ -316,6 +320,18 @@ func build(c Candidate) (Item, error) {
 			dir = registry.PromptsDir
 		}
 		it.Dest = dir + "/" + c.Name + ".md"
+		if strings.HasSuffix(c.Path, ".toml") {
+			// Codex agents and Gemini CLI commands are TOML files.
+			front, body, err := fromTOML(c, text)
+			if err != nil {
+				return it, err
+			}
+			it.Lossy = true
+			if out, err = render(front, body); err != nil {
+				return it, err
+			}
+			break
+		}
 		doc, err := registry.ParseDoc(c.Name, text)
 		if err != nil {
 			return it, err
@@ -333,6 +349,47 @@ func build(c Candidate) (Item, error) {
 	}
 	it.Files = []gitx.File{{Path: it.Dest, Data: out}}
 	return it, nil
+}
+
+// fromTOML reads an agent or prompt that a tool keeps as a TOML file. The
+// text is the key the tool reads its instructions from; a description is
+// shared with the other tools; every other key belongs to this tool alone.
+func fromTOML(c Candidate, text string) (*yaml.Node, string, error) {
+	fields := map[string]any{}
+	if _, err := toml.Decode(text, &fields); err != nil {
+		return nil, "", fmt.Errorf("not valid TOML: %w", err)
+	}
+	bodyKey := "developer_instructions"
+	if c.Kind == KindPrompt {
+		bodyKey = "prompt"
+	}
+	body, _ := fields[bodyKey].(string)
+	if strings.TrimSpace(body) == "" {
+		return nil, "", fmt.Errorf("it has no %q", bodyKey)
+	}
+	if c.Kind == KindPrompt {
+		// Registries write $ARGUMENTS for what the user typed.
+		body = strings.ReplaceAll(body, "{{args}}", "$ARGUMENTS")
+	}
+	description, _ := fields["description"].(string)
+	if c.Kind == KindAgent && description == "" {
+		return nil, "", fmt.Errorf("an agent needs a description")
+	}
+	delete(fields, bodyKey)
+	delete(fields, "description")
+	delete(fields, "name")
+	front := &yaml.Node{Kind: yaml.MappingNode}
+	if description != "" {
+		front.Content = append(front.Content, str("description"), str(description))
+	}
+	if len(fields) > 0 {
+		own := &yaml.Node{}
+		if err := own.Encode(fields); err != nil {
+			return nil, "", err
+		}
+		front.Content = append(front.Content, str(c.Target), own)
+	}
+	return front, strings.Trim(body, "\n") + "\n", nil
 }
 
 func mustRead(path string) []byte {
@@ -500,14 +557,20 @@ func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
 		if orig.Front != nil {
 			for j := 0; j+1 < len(orig.Front.Content); j += 2 {
 				key := orig.Front.Content[j]
-				if target.Known(key.Value) && key.Value != it.Target {
+				has := false
+				for k := 0; k+1 < len(front.Content); k += 2 {
+					has = has || front.Content[k].Value == key.Value
+				}
+				// Another tool's section is never in the local file. With
+				// a lossy form the shared fields are missing too.
+				if !has && key.Value != it.Target && (target.Known(key.Value) || it.Lossy) {
 					front.Content = append(front.Content, key, orig.Front.Content[j+1])
 					kept = append(kept, key.Value)
 				}
 			}
 		}
 		if len(kept) > 0 {
-			it.Notes = append(it.Notes, fmt.Sprintf("the registry's settings for %s are kept as they are", strings.Join(kept, ", ")))
+			it.Notes = append(it.Notes, fmt.Sprintf("kept from the registry's version, because your %s copy does not hold them: %s", it.Target, strings.Join(kept, ", ")))
 		}
 		data, err := render(front, local.Body)
 		if err != nil {

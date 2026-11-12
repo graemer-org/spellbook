@@ -319,8 +319,9 @@ your own `git` and gives you the link to open a pull request, so the change
 is reviewed like any other.
 
 - **It works out what you are pushing** from where the file lies: a skill,
-  an instruction, an agent or a prompt, written for Claude Code or Copilot.
-  MCP servers, hooks and the other tools' formats are not supported yet.
+  an instruction, an agent or a prompt, in the form of any of the five
+  tools, including Cursor's `.mdc` rules, Codex's TOML agents and Gemini
+  CLI's TOML commands. MCP servers and hooks are not supported yet.
 - **It turns the tool's form into the registry's.** Copilot's `applyTo`
   becomes `paths`. Fields only one tool understands, such as an agent's
   `model`, move under that tool's name, and push tells you so.

@@ -333,7 +333,7 @@ func TestPushKeepsWhatTheLocalFormCannotCarry(t *testing.T) {
 	if strings.Contains(got, "name: reviewer") {
 		t.Errorf("the name Claude Code needs does not belong in the registry:\n%s", got)
 	}
-	if !strings.Contains(out, "the registry's settings for copilot are kept") {
+	if !strings.Contains(out, "kept from the registry's version, because your claude copy does not hold them: copilot") {
 		t.Errorf("the user should be told what was kept:\n%s", out)
 	}
 	ins := show(t, repo, "b", "instructions/tf.md")
@@ -363,5 +363,49 @@ func TestPushReplacesAResourceOfTheSameName(t *testing.T) {
 	out := e.mustRun("push", "skill", "notes", "-p", "--yes")
 	if !strings.Contains(out, "replaces what is in acme") || !strings.Contains(show(t, repo, "spellbook/update-notes", "skills/notes/SKILL.md"), "mine") {
 		t.Errorf("a local resource with a name the registry uses is an update, and says so:\n%s", out)
+	}
+}
+
+func TestPushFromCursorCodexAndGemini(t *testing.T) {
+	e := newEnv(t)
+	for k, v := range map[string]string{"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.com", "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.com"} {
+		t.Setenv(k, v)
+	}
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(t, filepath.Join(repo, "agents", "reviewer.md"), "---\ndescription: Reviews code\ntools: Read, Grep\nclaude:\n  model: opus\n---\nYou review code. v1\n")
+	e.commit(repo, "agent")
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project", "--target", "cursor", "--target", "codex", "--target", "gemini")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+
+	// Cursor: a rule with unquoted globs, the way Cursor writes it.
+	write(t, filepath.Join(project, ".cursor", "rules", "ts.mdc"), "---\nglobs: **/*.ts,**/*.tsx\nalwaysApply: false\n---\nUse strict mode.\n")
+	// Gemini CLI: a command as TOML.
+	write(t, filepath.Join(project, ".gemini", "commands", "standup.toml"), "description = \"Write a standup\"\nprompt = \"\"\"\nStandup for {{args}}.\n\"\"\"\n")
+	// Codex: a new agent as TOML, and a change to the one from the registry.
+	write(t, filepath.Join(project, ".codex", "agents", "planner.toml"), "name = \"planner\"\ndescription = \"Plans work\"\ndeveloper_instructions = \"You plan.\"\nmodel_reasoning_effort = \"high\"\n")
+	codexAgent := filepath.Join(project, ".codex", "agents", "reviewer.toml")
+	write(t, codexAgent, strings.Replace(read(t, codexAgent), "v1", "v2 from codex", 1))
+
+	e.mustRun("push", "-p", "--yes", "--branch", "b",
+		".cursor/rules/ts.mdc", ".gemini/commands/standup.toml", "agent", "planner", "agent", "reviewer")
+
+	if got := show(t, repo, "b", "instructions/ts.md"); !strings.Contains(got, `- "**/*.ts"`) || !strings.Contains(got, `- "**/*.tsx"`) || strings.Contains(got, "globs") || strings.Contains(got, "alwaysApply") {
+		t.Errorf("Cursor's globs should become paths:\n%s", got)
+	}
+	if got := show(t, repo, "b", "prompts/standup.md"); !strings.Contains(got, "description: Write a standup") || !strings.Contains(got, "Standup for $ARGUMENTS.") {
+		t.Errorf("the Gemini command should become a prompt:\n%s", got)
+	}
+	planner := show(t, repo, "b", "agents/planner.md")
+	if !strings.Contains(planner, "description: Plans work") || !strings.Contains(planner, "codex:\n    model_reasoning_effort: high") || !strings.Contains(planner, "You plan.") || strings.Contains(planner, "name:") {
+		t.Errorf("the Codex agent should become Markdown with its own fields under codex:\n%s", planner)
+	}
+	// Codex's copy holds neither the tools nor Claude Code's model.
+	reviewer := show(t, repo, "b", "agents/reviewer.md")
+	for _, want := range []string{"v2 from codex", "tools: Read, Grep", "claude:\n    model: opus", "description: Reviews code"} {
+		if !strings.Contains(reviewer, want) {
+			t.Errorf("the updated agent misses %q:\n%s", want, reviewer)
+		}
 	}
 }

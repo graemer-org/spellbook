@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -15,6 +16,8 @@ import (
 
 	"github.com/graemer-org/spellbook/internal/config"
 )
+
+var cursorGlobs = regexp.MustCompile(`(?m)^globs:[ \t]*(.*)\n?`)
 
 // InstructionsDir is the directory of a registry that holds instructions.
 const InstructionsDir = "instructions"
@@ -101,6 +104,16 @@ func ParseInstruction(name, text string) (Instruction, error) {
 		return ins, err
 	}
 	if has {
+		// Cursor writes "globs: **/*.ts,**/*.tsx" without quotes, which is
+		// not valid YAML, so that line is read by hand.
+		if m := cursorGlobs.FindStringSubmatch(front); m != nil {
+			front = cursorGlobs.ReplaceAllString(front, "")
+			for _, p := range strings.Split(strings.Trim(strings.TrimSpace(m[1]), "[]"), ",") {
+				if p = strings.Trim(strings.TrimSpace(p), `"'`); p != "" {
+					ins.Paths = append(ins.Paths, p)
+				}
+			}
+		}
 		var meta struct {
 			Description string    `yaml:"description"`
 			Paths       yaml.Node `yaml:"paths"`
@@ -113,6 +126,10 @@ func ParseInstruction(name, text string) (Instruction, error) {
 		ins.Description = meta.Description
 		if meta.Paths.Kind == 0 {
 			meta.Paths = meta.ApplyTo
+		}
+		if len(ins.Paths) > 0 {
+			// Already taken from Cursor's globs.
+			meta.Paths = yaml.Node{}
 		}
 		switch meta.Paths.Kind {
 		case 0:
