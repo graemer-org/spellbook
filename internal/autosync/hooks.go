@@ -3,6 +3,7 @@ package autosync
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,8 +35,12 @@ func HookFile(target string, loc config.Location) (string, error) {
 		}
 		return filepath.Join(loc.Root, ".copilot", "hooks", "spellbook.json"), nil
 	}
-	return "", fmt.Errorf("unknown target %q", target)
+	return "", ErrUnsupported
 }
+
+// ErrUnsupported is returned for a tool Spellbook cannot install a session
+// hook for.
+var ErrUnsupported = errors.New("no session hook available for this tool")
 
 // Installed reports whether the session hook of a target is in place.
 func Installed(target string, loc config.Location) (bool, error) {

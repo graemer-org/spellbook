@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -313,15 +314,34 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 	}
 	for _, tname := range cfg.EnabledTargets() {
 		r.counts(tname)
+		// Resources the tool has no place for are counted per kind and
+		// reported once, so the user knows what did not arrive.
+		unsupported := map[string]int{}
+		skip := func(kind string, err error) bool {
+			if errors.Is(err, target.ErrUnsupported) {
+				unsupported[kind]++
+				return true
+			}
+			return false
+		}
 		dir, err := target.SkillsDir(tname, cfg.Targets[tname], loc)
-		if err != nil {
+		if err != nil && !skip("skills", err) {
 			return nil, err
 		}
+		if err != nil {
+			unsupported["skills"] = len(skills)
+		}
 		for _, s := range skills {
+			if err != nil {
+				break
+			}
 			add(item{abs: filepath.Join(dir, s.name), target: tname, kind: KindSkill, name: s.name, registry: s.registry, commit: s.commit, hash: s.hash, dir: s.dir})
 		}
 		for _, in := range instructions {
 			place, err := target.InstructionPlace(tname, loc, in.name, in.ins.Scoped())
+			if skip("instructions", err) {
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -336,6 +356,9 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 		}
 		for _, a := range agents {
 			file, err := target.AgentFile(tname, loc, a.name)
+			if skip("agents", err) {
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -350,6 +373,9 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 		}
 		for _, m := range servers {
 			place, err := target.MCPFor(tname, loc)
+			if skip("MCP servers", err) {
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -364,12 +390,18 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			if !h.hook.For(tname) {
 				continue
 			}
-			if tname == "copilot" && loc.Scope == config.ScopeProject && slices.Contains(enabled, "claude") && h.hook.For("claude") {
-				// In a project Copilot also runs the hooks in Claude Code's
-				// settings file. A second entry would run the hook twice.
+			if loc.Scope == config.ScopeProject && slices.ContainsFunc(target.ReadsProjectHooksOf(tname), func(other string) bool {
+				return slices.Contains(enabled, other) && h.hook.For(other)
+			}) {
+				// In a project this tool also runs the hooks in another
+				// tool's file, where this hook is written already. A second
+				// entry would run it twice.
 				continue
 			}
 			place, err := target.HookFor(tname, loc)
+			if skip("hooks", err) {
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -391,15 +423,13 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			}
 			wantHooks[place] = append(wantHooks[place], hookWant{id: id, name: h.name, target: tname, registry: h.registry, commit: h.commit, event: h.hook.Event, entry: entry})
 		}
-		unsupported := 0
 		for _, p := range prompts {
 			place, err := target.PromptFor(tname, cfg.Targets[tname], loc, p.name)
+			if skip("prompts", err) {
+				continue
+			}
 			if err != nil {
 				return nil, err
-			}
-			if !place.Supported {
-				unsupported++
-				continue
 			}
 			if !place.AsSkill {
 				content, err := target.RenderDoc(tname, p.doc.Front, p.doc.Body, nil)
@@ -435,8 +465,10 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			}
 			add(item{abs: place.Path, target: tname, kind: KindPrompt, name: p.name, registry: p.registry, commit: p.commit, hash: hash, dir: src})
 		}
-		if unsupported > 0 {
-			r.warnf("%s: skipped %d prompts: this tool only reads prompts from a project, use --project", tname, unsupported)
+		for _, kind := range []string{"skills", "instructions", "agents", "prompts", "MCP servers", "hooks"} {
+			if n := unsupported[kind]; n > 0 {
+				r.warnf("%s: skipped %d %s: %v", tname, n, kind, target.ErrUnsupported)
+			}
 		}
 	}
 

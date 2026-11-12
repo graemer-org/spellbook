@@ -22,7 +22,7 @@ go vet ./... && gofmt -l .    # must be clean before committing
 | `cmd/spellbook` | `main`, nothing else |
 | `internal/cli` | cobra commands, all user-facing output |
 | `internal/config` | TOML config, the two scopes (home, project), validation |
-| `internal/target` | where each tool reads its files and in which format (`claude`, `copilot`) |
+| `internal/target` | where each tool reads its files and in which format; one file per tool |
 | `internal/blocks` | marked blocks inside files the user also edits |
 | `internal/registry` | fetch a registry, discover resources, read `registry.toml`, resolve groups |
 | `internal/lock` | `spellbook.lock`, the commit each registry was synced at |
@@ -90,6 +90,25 @@ go vet ./... && gofmt -l .    # must be clean before committing
 - Home: `~/.config/spellbook/config.toml`, writes below the home directory.
 - Project (`--project`): `spellbook.toml` in the project root, found by
   walking up from the working directory; writes into the repository.
+
+## Adding a tool
+
+A tool is one `target.Spec` in its own file in `internal/target`
+(`claude.go` and `copilot.go` are the models), registered from `init`.
+Nothing else needs to know its name.
+
+- Leave a function nil when the tool has no such kind of resource, and
+  return `false` when it has none in the given scope. The sync then skips
+  those resources and reports how many, per kind.
+- Check every path and format against the tool's current documentation
+  before writing it down, and say in the file's comment what was verified.
+- A new place type (a different file layout, a different merge) belongs in
+  `internal/syncer`, with the same ownership rules as the existing ones.
+- Session hooks for the automatic sync are in `internal/autosync`; a tool
+  without one returns `ErrUnsupported` there.
+- Add tests in `internal/cli` that sync a registry with every kind into the
+  new tool, at home and in a project, and extend the tables in the README
+  and on the website.
 
 ## Open source
 

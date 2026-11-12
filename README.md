@@ -310,7 +310,9 @@ ai-registry/
 ```
 
 - `--path platform` subscribes to one subdirectory only.
-- `--skill code-review` installs only the named skills.
+- `--skill code-review` installs only the named skills. `--instruction`,
+  `--agent`, `--prompt`, `--mcp-server` and `--hook` do the same for their
+  kind.
 - `--only skills` installs only that kind of resource.
 - `--ref` follows a branch, or pins a tag or commit.
 
@@ -516,11 +518,8 @@ Spellbook rewrites the `name` in the skill's frontmatter to match.
 ```sh
 spellbook init [--project] [--target claude] [--target copilot]
 
-spellbook registry add <name> <git-url> [--ref main] [--path teams/platform]
-                       [--group platform]... [--skill name]...
-                       [--only skills|instructions|agents|prompts|mcp|hooks]...
-                       [--allow mcp|hooks]...
-                       [--priority 10] [--prefix all|collisions] [--no-sync]
+spellbook registry add <name> <git-url> [settings] [--no-sync]
+spellbook registry set <name> [--url <git-url>] [settings]
 spellbook registry list
 spellbook registry remove <name> [--force]
 spellbook registry setup <directory>
@@ -541,6 +540,22 @@ spellbook doctor [--offline]
 
 Every command takes `--project` (`-p`) to work on the project instead of the
 home configuration.
+
+The settings of a registry, for `registry add` and `registry set`:
+
+| Flag | Meaning |
+|---|---|
+| `--ref main` | branch, tag or commit to follow |
+| `--path teams/platform` | only this subdirectory of the repository |
+| `--group platform` | group to join; repeatable |
+| `--priority 10` | the higher number wins a name collision and comes first |
+| `--prefix all\|collisions` | install under `<registry>-<name>` |
+| `--only skills` | only this kind; repeatable |
+| `--allow mcp` | let the registry install MCP servers or hooks; repeatable |
+| `--skill`, `--instruction`, `--agent`, `--prompt`, `--mcp-server`, `--hook` | only the named resource of that kind; repeatable |
+
+`registry set` changes only what you pass. An empty value clears a setting,
+for example `--ref=` or `--skill=`.
 
 ### Where things go
 
@@ -606,7 +621,8 @@ priority = 10
 groups = ["platform"]
 prefix = "collisions"              # or "all"
 # path = "teams/platform"          # only this subdirectory
-# skills = ["terraform-review"]    # only these skills
+# skills = ["terraform-review"]    # only these skills; likewise
+#                                  # instructions, agents, prompts, mcp, hooks
 # only = ["skills"]                # only these kinds: skills, instructions, agents, prompts, mcp, hooks
 # allow = ["mcp", "hooks"]         # let this registry install MCP servers and hooks
 

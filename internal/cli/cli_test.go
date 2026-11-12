@@ -1443,3 +1443,96 @@ func TestProjectHooksAreNotDuplicatedForCopilot(t *testing.T) {
 		t.Errorf("Copilot's file should hold only the hook that is not in Claude's settings:\n%s", copilot)
 	}
 }
+
+func TestNameFiltersForEveryKind(t *testing.T) {
+	e := newEnv(t)
+	repo := e.agentRepo()
+	write(t, filepath.Join(repo, "agents", "planner.md"), "---\ndescription: Plans work\n---\nYou plan.\n")
+	write(t, filepath.Join(repo, "instructions", "one.md"), "First.\n")
+	write(t, filepath.Join(repo, "instructions", "two.md"), "Second.\n")
+	write(t, filepath.Join(repo, "prompts", "standup.md"), "Write a standup.\n")
+	e.commit(repo, "more")
+	e.mustRun("init", "--target", "claude")
+	out := e.mustRun("registry", "add", "acme", repo, "--agent", "planner", "--instruction", "two", "--prompt", "standup", "--agent", "nope")
+
+	if got := installed(t, filepath.Join(e.home, ".claude", "agents")); got != "planner.md" {
+		t.Errorf("agents: got %q, want planner.md", got)
+	}
+	if got := installed(t, filepath.Join(e.home, ".claude", "rules")); got != "two.md" {
+		t.Errorf("instructions: got %q, want two.md", got)
+	}
+	// Skills are not filtered, so the skill stays; of the prompts only one.
+	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "review,standup" {
+		t.Errorf("skills and prompts: got %q, want review,standup", got)
+	}
+	if !strings.Contains(out, `agent "nope" is configured but not offered`) {
+		t.Errorf("no warning about a filter that matches nothing:\n%s", out)
+	}
+	if out := e.mustRun("registry", "list"); !strings.Contains(out, "agents: planner,nope") {
+		t.Errorf("registry list does not show the filters:\n%s", out)
+	}
+}
+
+func TestRegistrySetChangesOnlyWhatIsPassed(t *testing.T) {
+	e := newEnv(t)
+	repo := e.teamRepo()
+	e.git(repo, "branch", "stable")
+	e.writeSkills(repo, map[string]string{"skills/review": "v2"})
+	e.commit(repo, "v2 on main")
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--priority", "5")
+	skill := filepath.Join(e.home, ".claude", "skills", "review", "SKILL.md")
+	if !strings.Contains(read(t, skill), "v2") {
+		t.Fatal("setup: expected v2 from main")
+	}
+
+	// Follow another branch; the priority must stay.
+	e.mustRun("registry", "set", "acme", "--ref", "stable")
+	if !strings.Contains(read(t, skill), "v1") {
+		t.Error("changing the ref did not sync the other branch")
+	}
+	cfg := read(t, filepath.Join(e.home, ".config", "spellbook", "config.toml"))
+	if !strings.Contains(cfg, `ref = "stable"`) || !strings.Contains(cfg, "priority = 5") {
+		t.Errorf("set should change the ref and keep the priority:\n%s", cfg)
+	}
+
+	// Lists are replaced, and an empty value clears them.
+	e.mustRun("registry", "set", "acme", "--group", "platform", "--skill", "terraform")
+	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "terraform" {
+		t.Errorf("got %q, want terraform", got)
+	}
+	e.mustRun("registry", "set", "acme", "--skill=", "--ref=")
+	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "review,terraform" {
+		t.Errorf("clearing the skill filter should bring back the group's skills, got %q", got)
+	}
+	cfg = read(t, filepath.Join(e.home, ".config", "spellbook", "config.toml"))
+	if strings.Contains(cfg, "skills =") || strings.Contains(cfg, "ref =") {
+		t.Errorf("cleared settings are still in the config:\n%s", cfg)
+	}
+}
+
+func TestRegistrySetRejectsWhatTheRegistryCannotSatisfy(t *testing.T) {
+	e := newEnv(t)
+	repo := e.teamRepo()
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	before := read(t, filepath.Join(e.home, ".config", "spellbook", "config.toml"))
+
+	for _, args := range [][]string{
+		{"registry", "set", "acme", "--group", "nope"},
+		{"registry", "set", "acme", "--ref", "no-such-branch"},
+		{"registry", "set", "acme", "--prefix", "sometimes"},
+		{"registry", "set", "acme"},
+		{"registry", "set", "ghost", "--priority", "1"},
+	} {
+		if code, out := e.run(args...); code == 0 {
+			t.Errorf("%v should fail:\n%s", args, out)
+		}
+	}
+	if read(t, filepath.Join(e.home, ".config", "spellbook", "config.toml")) != before {
+		t.Error("a rejected change was saved")
+	}
+	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "review" {
+		t.Errorf("a rejected change altered what is installed: %q", got)
+	}
+}

@@ -183,14 +183,7 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 			return runSync(cmd, loc, cfg, syncer.Options{})
 		},
 	}
-	add.Flags().StringVar(&reg.Ref, "ref", "", "branch, tag or commit to follow (default: the remote's default branch)")
-	add.Flags().StringVar(&reg.Path, "path", "", "only use this subdirectory of the repository")
-	add.Flags().IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
-	add.Flags().StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
-	add.Flags().StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
-	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions, agents, prompts, mcp, hooks; repeatable")
-	add.Flags().StringSliceVar(&reg.Allow, "allow", nil, "let the registry install this guarded kind: mcp, hooks; repeatable")
-	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of installed names: 'all', or 'collisions' for taken names only")
+	registryFlags(add, &reg)
 	add.Flags().BoolVar(&noSync, "no-sync", false, "add the registry without syncing")
 
 	list := &cobra.Command{
@@ -211,15 +204,27 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tURL\tREF\tPATH\tPRIORITY\tGROUPS\tSKILLS\tPREFIX")
+			fmt.Fprintln(w, "NAME\tURL\tREF\tPATH\tPRIORITY\tGROUPS\tLIMITED TO\tPREFIX")
 			for _, r := range cfg.Registries {
 				groups := "default"
 				if len(r.Groups) > 0 {
 					groups = strings.Join(r.Groups, ",")
 				}
-				skills := "all"
-				if len(r.Skills) > 0 {
-					skills = strings.Join(r.Skills, ",")
+				var limits []string
+				for _, l := range []struct {
+					kind  string
+					names []string
+				}{{"skills", r.Skills}, {"instructions", r.Instructions}, {"agents", r.Agents}, {"prompts", r.Prompts}, {"mcp", r.MCP}, {"hooks", r.Hooks}} {
+					if len(l.names) > 0 {
+						limits = append(limits, l.kind+": "+strings.Join(l.names, ","))
+					}
+				}
+				if len(r.Only) > 0 {
+					limits = append(limits, "only "+strings.Join(r.Only, ","))
+				}
+				skills := "-"
+				if len(limits) > 0 {
+					skills = strings.Join(limits, "; ")
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n", r.Name, r.URL, dash(r.Ref), dash(r.Path), r.Priority, groups, skills, dash(r.Prefix))
 			}
@@ -334,8 +339,106 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 		RunE:  func(cmd *cobra.Command, args []string) error { return permit(cmd, args, false) },
 	}
 
-	cmd.AddCommand(add, list, remove, setup, allow, disallow)
+	var edit config.Registry
+	var newURL string
+	set := &cobra.Command{
+		Use:   "set <name>",
+		Short: "Change the settings of a registry and sync",
+		Long: "Change how a registry is used. Only the flags you pass are changed. Pass an\n" +
+			"empty value to clear a setting, for example --ref= or --skill=.",
+		Example: "  spellbook registry set acme --ref stable --priority 10\n" +
+			"  spellbook registry set acme --group platform --group frontend\n" +
+			"  spellbook registry set acme --skill=            # all skills again",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loc, err := locate()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(loc)
+			if err != nil {
+				return err
+			}
+			for i := range cfg.Registries {
+				r := &cfg.Registries[i]
+				if r.Name != args[0] {
+					continue
+				}
+				changed := 0
+				str := func(flag string, dst *string, src string) {
+					if cmd.Flags().Changed(flag) {
+						*dst = src
+						changed++
+					}
+				}
+				list := func(flag string, dst *[]string, src []string) {
+					if cmd.Flags().Changed(flag) {
+						// An empty value clears the list.
+						*dst = slices.DeleteFunc(slices.Clone(src), func(v string) bool { return v == "" })
+						changed++
+					}
+				}
+				str("url", &r.URL, newURL)
+				str("ref", &r.Ref, edit.Ref)
+				str("path", &r.Path, edit.Path)
+				str("prefix", &r.Prefix, edit.Prefix)
+				if cmd.Flags().Changed("priority") {
+					r.Priority = edit.Priority
+					changed++
+				}
+				list("group", &r.Groups, edit.Groups)
+				list("only", &r.Only, edit.Only)
+				list("allow", &r.Allow, edit.Allow)
+				list("skill", &r.Skills, edit.Skills)
+				list("instruction", &r.Instructions, edit.Instructions)
+				list("agent", &r.Agents, edit.Agents)
+				list("prompt", &r.Prompts, edit.Prompts)
+				list("mcp-server", &r.MCP, edit.MCP)
+				list("hook", &r.Hooks, edit.Hooks)
+				if changed == 0 {
+					return fmt.Errorf("nothing to change: pass at least one flag, see 'spellbook registry set --help'")
+				}
+				if err := cfg.Validate(); err != nil {
+					return err
+				}
+				// Fetch before saving, so a setting the registry cannot
+				// satisfy never ends up in the config.
+				if _, err := registry.Fetch(cmd.Context(), *r); err != nil {
+					return fmt.Errorf("registry %s: %w", r.Name, err)
+				}
+				if err := config.Save(loc, cfg); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "Updated registry %s\n", r.Name)
+				return runSync(cmd, loc, cfg, syncer.Options{})
+			}
+			return fmt.Errorf("no registry named %q", args[0])
+		},
+	}
+	set.Flags().StringVar(&newURL, "url", "", "the git URL of the registry")
+	registryFlags(set, &edit)
+
+	cmd.AddCommand(add, list, remove, set, setup, allow, disallow)
 	return cmd
+}
+
+// registryFlags defines the flags that describe how a registry is used.
+// 'registry add' and 'registry set' share them.
+func registryFlags(cmd *cobra.Command, reg *config.Registry) {
+	f := cmd.Flags()
+	f.StringVar(&reg.Ref, "ref", "", "branch, tag or commit to follow (default: the remote's default branch)")
+	f.StringVar(&reg.Path, "path", "", "only use this subdirectory of the repository")
+	f.IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
+	f.StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
+	f.StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: "+strings.Join(config.Kinds, ", ")+"; repeatable")
+	f.StringSliceVar(&reg.Allow, "allow", nil, "let the registry install this guarded kind: "+strings.Join(config.GuardedKinds, ", ")+"; repeatable")
+	f.StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of installed names: 'all', or 'collisions' for taken names only")
+	f.StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
+	f.StringSliceVar(&reg.Instructions, "instruction", nil, "only install this instruction; repeatable")
+	f.StringSliceVar(&reg.Agents, "agent", nil, "only install this agent; repeatable")
+	f.StringSliceVar(&reg.Prompts, "prompt", nil, "only install this prompt; repeatable")
+	f.StringSliceVar(&reg.MCP, "mcp-server", nil, "only install this MCP server; repeatable")
+	f.StringSliceVar(&reg.Hooks, "hook", nil, "only install this hook; repeatable")
 }
 
 const setupManifest = `# Describes this registry for spellbook.
@@ -776,7 +879,12 @@ func newAutosync(locate func() (config.Location, error)) *cobra.Command {
 			return fmt.Errorf("no target is enabled in %s", loc.ConfigPath)
 		}
 		for _, t := range cfg.EnabledTargets() {
-			if err := fn(loc, cfg, t); err != nil {
+			err := fn(loc, cfg, t)
+			if errors.Is(err, autosync.ErrUnsupported) {
+				fmt.Fprintf(cmd.OutOrStdout(), "%-8s %v\n", t, err)
+				continue
+			}
+			if err != nil {
 				return err
 			}
 		}

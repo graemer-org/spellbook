@@ -62,7 +62,13 @@ type Registry struct {
 	// registry's default groups, or everything when it defines none.
 	Groups []string `toml:"groups,omitempty"`
 	// Skills limits the registry to the named skills. Empty means all.
-	Skills []string `toml:"skills,omitempty"`
+	// The other lists do the same for their kind.
+	Skills       []string `toml:"skills,omitempty"`
+	Instructions []string `toml:"instructions,omitempty"`
+	Agents       []string `toml:"agents,omitempty"`
+	Prompts      []string `toml:"prompts,omitempty"`
+	MCP          []string `toml:"mcp,omitempty"`
+	Hooks        []string `toml:"hooks,omitempty"`
 	// Only limits the registry to some kinds of resources. Empty means all.
 	Only []string `toml:"only,omitempty"`
 	// Allow names the guarded kinds this registry may install.

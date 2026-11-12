@@ -11,11 +11,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/graemer-org/spellbook/internal/config"
 	"github.com/graemer-org/spellbook/internal/gitx"
+	"github.com/graemer-org/spellbook/internal/target"
 )
 
 // SkillFile marks a directory as a skill.
@@ -163,6 +165,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			}
 			snap.Instructions, warnings = pick(instructions, names, func(i Instruction) string { return i.Name }, warnings, "a group lists instruction %q, which is not in the registry")
 		}
+		snap.Instructions, warnings = limit(snap.Instructions, r.Instructions, func(i Instruction) string { return i.Name }, warnings, "instruction")
 	}
 	docName := func(d Doc) string { return d.Name }
 	if r.Wants(config.KindAgents) {
@@ -174,6 +177,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			}
 			snap.Agents, warnings = pick(agents, names, docName, warnings, "a group lists agent %q, which is not in the registry")
 		}
+		snap.Agents, warnings = limit(snap.Agents, r.Agents, docName, warnings, "agent")
 	}
 	if r.Wants(config.KindPrompts) {
 		snap.Prompts = prompts
@@ -184,6 +188,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			}
 			snap.Prompts, warnings = pick(prompts, names, docName, warnings, "a group lists prompt %q, which is not in the registry")
 		}
+		snap.Prompts, warnings = limit(snap.Prompts, r.Prompts, docName, warnings, "prompt")
 	}
 	if r.Wants(config.KindMCP) {
 		servers, mwarn, err := DiscoverMCP(root)
@@ -200,6 +205,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			}
 			selected, warnings = pick(servers, names, func(m MCPServer) string { return m.Name }, warnings, "a group lists MCP server %q, which is not in the registry")
 		}
+		selected, warnings = limit(selected, r.MCP, func(m MCPServer) string { return m.Name }, warnings, "MCP server")
 		if r.Allows(config.KindMCP) {
 			snap.MCP = selected
 		} else {
@@ -207,7 +213,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 		}
 	}
 	if r.Wants(config.KindHooks) {
-		hooks, hwarn, err := DiscoverHooks(root, []string{"claude", "copilot"})
+		hooks, hwarn, err := DiscoverHooks(root, target.Names())
 		if err != nil {
 			return nil, err
 		}
@@ -221,6 +227,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			}
 			selected, warnings = pick(hooks, names, func(h Hook) string { return h.Name }, warnings, "a group lists hook %q, which is not in the registry")
 		}
+		selected, warnings = limit(selected, r.Hooks, func(h Hook) string { return h.Name }, warnings, "hook")
 		if r.Allows(config.KindHooks) {
 			snap.Hooks = selected
 		} else {
@@ -229,6 +236,28 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 	}
 	snap.Warnings = warnings
 	return snap, nil
+}
+
+// limit keeps only the items the subscriber named, in their existing
+// order. An empty list keeps everything.
+func limit[T any](items []T, names []string, name func(T) string, warnings []string, kind string) ([]T, []string) {
+	if len(names) == 0 {
+		return items, warnings
+	}
+	var out []T
+	found := map[string]bool{}
+	for _, it := range items {
+		if slices.Contains(names, name(it)) {
+			out = append(out, it)
+			found[name(it)] = true
+		}
+	}
+	for _, n := range names {
+		if !found[n] {
+			warnings = append(warnings, fmt.Sprintf("%s %q is configured but not offered by the registry or the selected groups", kind, n))
+		}
+	}
+	return out, warnings
 }
 
 // pick returns the items with the wanted names, in the order of want, and
