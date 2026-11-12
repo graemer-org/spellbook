@@ -65,6 +65,8 @@ type Registry struct {
 	Skills []string `toml:"skills,omitempty"`
 	// Only limits the registry to some kinds of resources. Empty means all.
 	Only []string `toml:"only,omitempty"`
+	// Allow names the guarded kinds this registry may install.
+	Allow []string `toml:"allow,omitempty"`
 	// Prefix puts the registry name in front of installed names:
 	// PrefixAll always, PrefixCollisions only when the plain name is taken.
 	Prefix string `toml:"prefix,omitempty"`
@@ -76,10 +78,19 @@ const (
 	KindInstructions = "instructions"
 	KindAgents       = "agents"
 	KindPrompts      = "prompts"
+	KindMCP          = "mcp"
 )
 
 // Kinds lists the valid values of Registry.Only.
-var Kinds = []string{KindSkills, KindInstructions, KindAgents, KindPrompts}
+var Kinds = []string{KindSkills, KindInstructions, KindAgents, KindPrompts, KindMCP}
+
+// GuardedKinds are the kinds that start programs or open connections on
+// the user's machine. A registry only provides them when Registry.Allow
+// names them.
+var GuardedKinds = []string{KindMCP}
+
+// Allows reports whether the subscriber allowed a guarded kind.
+func (r Registry) Allows(kind string) bool { return slices.Contains(r.Allow, kind) }
 
 // Wants reports whether the subscriber wants resources of the given kind.
 func (r Registry) Wants(kind string) bool {
@@ -262,6 +273,11 @@ func (c *Config) Validate() error {
 		for _, k := range r.Only {
 			if !slices.Contains(Kinds, k) {
 				return fmt.Errorf("registry %q: only must name kinds from %v, not %q", r.Name, Kinds, k)
+			}
+		}
+		for _, k := range r.Allow {
+			if !slices.Contains(GuardedKinds, k) {
+				return fmt.Errorf("registry %q: allow must name kinds from %v, not %q", r.Name, GuardedKinds, k)
 			}
 		}
 		switch r.Prefix {

@@ -27,6 +27,7 @@ type Group struct {
 	Instructions []string `toml:"instructions,omitempty"`
 	Agents       []string `toml:"agents,omitempty"`
 	Prompts      []string `toml:"prompts,omitempty"`
+	MCP          []string `toml:"mcp,omitempty"`
 }
 
 // Manifest is the content of a registry.toml file.
@@ -117,6 +118,11 @@ func (m *Manifest) Agents(groups []string) ([]string, error) {
 // Prompts returns the prompt names of the given groups.
 func (m *Manifest) Prompts(groups []string) ([]string, error) {
 	return m.resolve(groups, func(g Group) []string { return g.Prompts })
+}
+
+// MCP returns the MCP server names of the given groups.
+func (m *Manifest) MCP(groups []string) ([]string, error) {
+	return m.resolve(groups, func(g Group) []string { return g.MCP })
 }
 
 func (m *Manifest) resolve(groups []string, field func(Group) []string) ([]string, error) {

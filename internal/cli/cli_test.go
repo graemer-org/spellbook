@@ -1126,3 +1126,167 @@ func TestDoctorReportsEditedAndMissingResources(t *testing.T) {
 		t.Errorf("doctor should fail for an unreachable registry: exit %d\n%s", code, out)
 	}
 }
+
+// mcpRepo is a registry with a local and a remote MCP server.
+func (e *env) mcpRepo() string {
+	e.t.Helper()
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(e.t, filepath.Join(repo, "mcp", "docs.json"), `{
+  "command": "npx",
+  "args": ["-y", "@acme/docs-mcp"],
+  "env": {"DOCS_TOKEN": "${DOCS_TOKEN}"},
+  "copilot": {"tools": ["search"]}
+}`)
+	write(e.t, filepath.Join(repo, "mcp", "tracker.json"), `{"type": "http", "url": "https://mcp.example.com/mcp"}`)
+	write(e.t, filepath.Join(repo, "mcp", "broken.json"), `{"args": []}`)
+	e.commit(repo, "mcp")
+	return repo
+}
+
+func TestMCPServersNeedPermission(t *testing.T) {
+	e := newEnv(t)
+	repo := e.mcpRepo()
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project")
+	out := e.mustRun("registry", "add", "acme", repo, "-p")
+	if !strings.Contains(out, "2 MCP servers not allowed") || !strings.Contains(out, "spellbook registry allow acme mcp") {
+		t.Errorf("the user is not told about the held back servers:\n%s", out)
+	}
+	if exists(filepath.Join(project, ".mcp.json")) || exists(filepath.Join(project, ".github", "mcp.json")) {
+		t.Fatal("MCP servers were installed without permission")
+	}
+
+	e.mustRun("registry", "allow", "acme", "mcp", "-p")
+	claude := read(t, filepath.Join(project, ".mcp.json"))
+	for _, want := range []string{`"docs"`, `"npx"`, `"${DOCS_TOKEN}"`, `"tracker"`, `"https://mcp.example.com/mcp"`} {
+		if !strings.Contains(claude, want) {
+			t.Errorf(".mcp.json misses %s:\n%s", want, claude)
+		}
+	}
+	if strings.Contains(claude, "tools") || strings.Contains(claude, "copilot") {
+		t.Errorf(".mcp.json contains fields meant for Copilot:\n%s", claude)
+	}
+	copilot := read(t, filepath.Join(project, ".github", "mcp.json"))
+	if !strings.Contains(copilot, `"search"`) || !strings.Contains(copilot, `"*"`) {
+		t.Errorf("Copilot needs a tools field, its own or the default:\n%s", copilot)
+	}
+
+	if out := e.mustRun("sync", "-p"); strings.Contains(out, " 1 updated") || strings.Contains(out, "2 installed") {
+		t.Errorf("second sync is not a no-op:\n%s", out)
+	}
+
+	e.mustRun("registry", "disallow", "acme", "mcp", "-p")
+	if exists(filepath.Join(project, ".mcp.json")) || exists(filepath.Join(project, ".github", "mcp.json")) {
+		t.Error("taking the permission back should remove the servers and the files that held nothing else")
+	}
+}
+
+func TestMCPLeavesOtherServersAndUnmanagedNamesAlone(t *testing.T) {
+	e := newEnv(t)
+	repo := e.mcpRepo()
+	cfgFile := filepath.Join(e.home, ".copilot", "mcp-config.json")
+	write(t, cfgFile, `{
+  "mcpServers": {
+    "mine": {"command": "my-server", "args": [], "tools": ["*"]},
+    "tracker": {"type": "http", "url": "https://my-own.example.com", "tools": ["*"]}
+  },
+  "other": true
+}
+`)
+	e.mustRun("init", "--target", "copilot")
+	out := e.mustRun("registry", "add", "acme", repo, "--allow", "mcp")
+	got := read(t, cfgFile)
+	for _, want := range []string{`"mine"`, "my-server", "https://my-own.example.com", `"other": true`, `"docs"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config misses %s:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "https://mcp.example.com/mcp") {
+		t.Errorf("a server the user defined was overwritten:\n%s", got)
+	}
+	if !strings.Contains(out, `skipped MCP server "tracker"`) {
+		t.Errorf("no warning about the unmanaged server of the same name:\n%s", out)
+	}
+
+	// A managed server the user edited is kept until --force.
+	write(t, cfgFile, strings.Replace(got, "@acme/docs-mcp", "@acme/docs-mcp@1.0", 1))
+	write(t, filepath.Join(repo, "mcp", "docs.json"), `{"command": "npx", "args": ["-y", "@acme/docs-mcp@2"]}`)
+	e.commit(repo, "v2")
+	e.mustRun("sync")
+	if got := read(t, cfgFile); !strings.Contains(got, "@acme/docs-mcp@1.0") {
+		t.Errorf("an edited server was overwritten without --force:\n%s", got)
+	}
+	e.mustRun("sync", "--force")
+	if got := read(t, cfgFile); !strings.Contains(got, "@acme/docs-mcp@2") {
+		t.Errorf("--force did not update the server:\n%s", got)
+	}
+
+	e.mustRun("registry", "remove", "acme")
+	got = read(t, cfgFile)
+	if strings.Contains(got, `"docs"`) || !strings.Contains(got, `"mine"`) || !strings.Contains(got, "https://my-own.example.com") {
+		t.Errorf("removing the registry should remove only its server:\n%s", got)
+	}
+}
+
+func TestClaudeUserLevelMCPGoesThroughTheClaudeCommand(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("the stand-in for the claude command needs python3")
+	}
+	e := newEnv(t)
+	repo := e.mcpRepo()
+	// A stand-in for 'claude mcp add-json|remove' that edits ~/.claude.json
+	// and, like the real one, stores a normalised form of the entry.
+	fake := filepath.Join(t.TempDir(), "claude")
+	write(t, fake, `#!/usr/bin/env python3
+import json, os, sys
+path = os.path.expanduser("~/.claude.json")
+data = json.load(open(path)) if os.path.exists(path) else {}
+servers = data.setdefault("mcpServers", {})
+args = sys.argv[1:]
+assert args[0] == "mcp" and args[2:4] == ["--scope", "user"], args
+if args[1] == "add-json":
+    entry = json.loads(args[5])
+    entry.setdefault("type", "stdio")
+    servers[args[4]] = entry
+elif args[1] == "remove":
+    del servers[args[4]]
+json.dump(data, open(path, "w"))
+`)
+	if err := os.Chmod(fake, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPELLBOOK_CLAUDE_BIN", fake)
+	write(t, filepath.Join(e.home, ".claude.json"), `{"numStartups": 7}`)
+
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--allow", "mcp")
+	got := read(t, filepath.Join(e.home, ".claude.json"))
+	if !strings.Contains(got, "@acme/docs-mcp") || !strings.Contains(got, "numStartups") {
+		t.Fatalf("servers were not added through the claude command:\n%s", got)
+	}
+	// The tool stored a different form than it was given. That must not
+	// look like a local edit on the next sync.
+	if out := e.mustRun("sync"); !strings.Contains(out, "0 installed, 0 updated") || strings.Contains(out, "edited") {
+		t.Errorf("second sync is not a no-op:\n%s", out)
+	}
+
+	e.mustRun("registry", "remove", "acme")
+	if got := read(t, filepath.Join(e.home, ".claude.json")); strings.Contains(got, "docs-mcp") || !strings.Contains(got, "numStartups") {
+		t.Errorf("servers were not removed through the claude command:\n%s", got)
+	}
+}
+
+func TestClaudeUserLevelMCPIsSkippedWithoutTheClaudeCommand(t *testing.T) {
+	e := newEnv(t)
+	repo := e.mcpRepo()
+	t.Setenv("SPELLBOOK_CLAUDE_BIN", filepath.Join(t.TempDir(), "no-such-claude"))
+	e.mustRun("init", "--target", "claude")
+	out := e.mustRun("registry", "add", "acme", repo, "--allow", "mcp")
+	if !strings.Contains(out, "'claude' command is needed") {
+		t.Errorf("no explanation why the servers were skipped:\n%s", out)
+	}
+	if exists(filepath.Join(e.home, ".claude.json")) {
+		t.Error("~/.claude.json must never be written directly")
+	}
+}

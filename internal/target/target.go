@@ -2,6 +2,7 @@
 package target
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -250,4 +251,59 @@ func isSet(set [][2]string, key string) bool {
 		}
 	}
 	return false
+}
+
+// MCPPlace says where a target keeps its MCP servers.
+type MCPPlace struct {
+	// File is the JSON file with the top-level "mcpServers" object.
+	File string
+	// ViaCLI is true when the file belongs to the tool and must only be
+	// changed through the tool's own command line.
+	ViaCLI bool
+}
+
+// MCPFor returns where MCP servers of a target are stored.
+//
+// Claude Code keeps user-level servers in ~/.claude.json, a file it
+// rewrites itself, so those are changed through 'claude mcp' and only read
+// from the file.
+func MCPFor(name string, loc config.Location) (MCPPlace, error) {
+	project := loc.Scope == config.ScopeProject
+	switch name {
+	case "claude":
+		if project {
+			return MCPPlace{File: filepath.Join(loc.Root, ".mcp.json")}, nil
+		}
+		return MCPPlace{File: filepath.Join(loc.Root, ".claude.json"), ViaCLI: true}, nil
+	case "copilot":
+		if project {
+			return MCPPlace{File: filepath.Join(loc.Root, ".github", "mcp.json")}, nil
+		}
+		return MCPPlace{File: filepath.Join(loc.Root, ".copilot", "mcp-config.json")}, nil
+	}
+	return MCPPlace{}, fmt.Errorf("unknown target %q (supported: %s)", name, strings.Join(Names(), ", "))
+}
+
+// RenderMCP returns the server definition for one target as canonical
+// JSON: the fields under the target's own key are merged into the top
+// level, and the keys of other targets are dropped. Copilot requires a
+// "tools" field, which defaults to all tools.
+func RenderMCP(name string, raw []byte) ([]byte, error) {
+	var def map[string]any
+	if err := json.Unmarshal(raw, &def); err != nil {
+		return nil, err
+	}
+	own, _ := def[name].(map[string]any)
+	for _, t := range Names() {
+		delete(def, t)
+	}
+	for k, v := range own {
+		def[k] = v
+	}
+	if name == "copilot" {
+		if _, ok := def["tools"]; !ok {
+			def["tools"] = []string{"*"}
+		}
+	}
+	return json.Marshal(def)
 }

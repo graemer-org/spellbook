@@ -54,6 +54,23 @@ func Verify(loc config.Location) (int, []Problem, error) {
 			}
 			continue
 		}
+		if e.Kind == KindMCP || e.Kind == KindMCPCLI {
+			i := strings.LastIndex(e.Path, "#")
+			if i < 0 {
+				continue
+			}
+			_, servers, err := readServers(absPath(loc.Root, e.Path[:i]))
+			if err != nil {
+				problems = append(problems, Problem{Entry: e})
+				continue
+			}
+			if hash, ok := serverHash(servers, e.Name); !ok {
+				problems = append(problems, Problem{Entry: e, Missing: true})
+			} else if hash != e.Hash {
+				problems = append(problems, Problem{Entry: e})
+			}
+			continue
+		}
 		abs := absPath(loc.Root, e.Path)
 		if _, err := os.Lstat(abs); os.IsNotExist(err) {
 			problems = append(problems, Problem{Entry: e, Missing: true})

@@ -3,13 +3,14 @@
 Subscribe to git repositories that hold AI tooling and keep Claude Code and
 GitHub Copilot in sync with them.
 
-A team keeps its skills, instructions, agents and prompts in one repository.
+A team keeps its skills, instructions, agents, prompts and MCP servers in one
+repository.
 Everyone subscribes once, and `spellbook sync` installs what is new, updates
 what changed and removes what was deleted, for both tools at the same time.
 
-> **Status:** early. Skills, instructions, agents, prompts, team groups,
-> the lock file and automatic sync work today. MCP servers are planned; see
-> the roadmap below.
+> **Status:** early. Skills, instructions, agents, prompts, MCP servers,
+> team groups, the lock file and automatic sync work today. See the roadmap
+> below for what is missing.
 
 ## Install
 
@@ -46,6 +47,8 @@ Spellbook works on two levels. They are independent, and you can use both.
 | GitHub Copilot agents | `~/.copilot/agents/` | `.github/agents/` |
 | Claude Code prompts | `~/.claude/skills/` (as a skill) | `.claude/skills/` (as a skill) |
 | GitHub Copilot prompts | not supported by Copilot | `.github/prompts/` |
+| Claude Code MCP servers | `~/.claude.json`, through the `claude` command | `.mcp.json` |
+| GitHub Copilot MCP servers | `~/.copilot/mcp-config.json` | `.github/mcp.json` |
 | Lock file | `~/.config/spellbook/spellbook.lock` | `spellbook.lock` |
 
 In a project, Spellbook writes real copies into the repository. Commit them
@@ -66,11 +69,14 @@ spellbook init [--project] [--target claude] [--target copilot]
 
 spellbook registry add <name> <git-url> [--ref main] [--path teams/platform]
                        [--group platform]... [--skill name]...
-                       [--only skills|instructions|agents|prompts]...
+                       [--only skills|instructions|agents|prompts|mcp]...
+                       [--allow mcp]
                        [--priority 10] [--prefix all|collisions] [--no-sync]
 spellbook registry list
 spellbook registry remove <name> [--force]
 spellbook registry setup <directory>
+spellbook registry allow <name> mcp
+spellbook registry disallow <name> mcp
 
 spellbook group list <registry>
 spellbook group join <registry> <group>...
@@ -96,6 +102,7 @@ Any git repository works as a registry.
 - Every Markdown file below `instructions/` is an instruction, below
   `agents/` an agent and below `prompts/` a prompt, each named after its
   file.
+- Every JSON file in `mcp/` is an MCP server, named after its file.
 
 ```
 ai-registry/
@@ -107,6 +114,8 @@ ai-registry/
 │   └── reviewer.md
 ├── prompts/
 │   └── release-notes.md
+├── mcp/
+│   └── internal-docs.json
 └── skills/
     ├── code-review/SKILL.md
     └── terraform-review/SKILL.md
@@ -192,6 +201,41 @@ A prompt is a reusable task you start yourself. The same `claude:` and
   with a warning. The two tools write arguments differently; Spellbook does
   not translate the body.
 
+### MCP servers
+
+An MCP server is one JSON file with the definition both tools expect under
+`mcpServers`. As for agents, `claude` and `copilot` hold fields for one tool
+only.
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@acme/docs-mcp"],
+  "env": { "DOCS_TOKEN": "${DOCS_TOKEN}" },
+  "copilot": { "tools": ["search"] }
+}
+```
+
+MCP servers start programs or connect to services on your machine. A
+registry therefore installs them only after you allowed it:
+
+```sh
+spellbook registry allow acme mcp
+```
+
+Never put secrets into a registry. Refer to environment variables as in the
+example; both tools expand `${VAR}`.
+
+- In a project, Claude Code's servers go to `.mcp.json` and Copilot's to
+  `.github/mcp.json`. Copilot requires a `tools` field, which Spellbook sets
+  to all tools unless you give one.
+- At home level, Copilot's servers go to `~/.copilot/mcp-config.json`.
+  Claude Code keeps its user-level servers in `~/.claude.json`, a file it
+  rewrites itself, so Spellbook changes them through `claude mcp` and needs
+  the `claude` command on the `PATH`.
+- Servers you added yourself stay untouched, also when a registry offers
+  one with the same name.
+
 ### Team groups
 
 A registry can describe itself in a `registry.toml` at its root and sort its
@@ -214,6 +258,7 @@ skills = ["terraform-review"]
 instructions = ["terraform-style"]
 agents = ["infra-reviewer"]
 prompts = ["release-notes"]
+mcp = ["internal-docs"]
 ```
 
 - A subscriber who chooses no group gets `default_groups`. Without
@@ -308,7 +353,8 @@ groups = ["platform"]
 prefix = "collisions"              # or "all"
 # path = "teams/platform"          # only this subdirectory
 # skills = ["terraform-review"]    # only these skills
-# only = ["skills"]                # only these kinds: skills, instructions, agents, prompts
+# only = ["skills"]                # only these kinds: skills, instructions, agents, prompts, mcp
+# allow = ["mcp"]                  # let this registry install MCP servers
 ```
 
 ## What Spellbook will and will not touch
@@ -331,8 +377,9 @@ Spellbook records everything it installs and only ever changes those paths.
 3. Instructions, layered (company, team) and path-scoped — done
 4. Agents and prompts — done
 5. Automatic sync, `sync --check` for CI, `doctor` — done
-6. MCP servers and hooks
+6. MCP servers, allowed per registry — done
 7. Installation with Homebrew
+8. Hooks from registries
 
 ## Development
 

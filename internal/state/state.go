@@ -24,8 +24,11 @@ type Entry struct {
 	Target   string `json:"target"`
 	Registry string `json:"registry"`
 	Commit   string `json:"commit"`
-	// Hash is the content hash of what was written.
+	// Hash is the content hash of what is on disk after the write.
 	Hash string `json:"hash"`
+	// Source is the hash of what Spellbook asked for, recorded only when a
+	// tool stores it in a different form than it was given.
+	Source string `json:"source,omitempty"`
 }
 
 // State is the content of a state.json file.

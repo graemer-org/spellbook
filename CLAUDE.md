@@ -28,6 +28,7 @@ go vet ./... && gofmt -l .    # must be clean before committing
 | `internal/lock` | `spellbook.lock`, the commit each registry was synced at |
 | `internal/gitx` | shell out to git |
 | `internal/syncer` | resolve what should be installed and apply it; compare and verify |
+| `internal/ojson` | edit JSON files while keeping the order of their keys |
 | `internal/autosync` | throttle for the automatic sync, session hooks for both tools |
 | `internal/state` | record of what Spellbook wrote |
 | `internal/fsutil` | hash and copy directories |
@@ -62,6 +63,13 @@ go vet ./... && gofmt -l .    # must be clean before committing
   are interpreted, and `name` is set to the installed name.
 - **Syncing twice changes nothing.** The second run must report everything
   as unchanged and must not rewrite any file.
+- **Guarded kinds need permission.** MCP servers run programs, so a registry
+  installs them only when its `allow` list names `mcp`. Anything added
+  later that executes code (hooks) must be guarded the same way.
+- **Never write `~/.claude.json`.** Claude Code rewrites that file itself.
+  User-level MCP servers are changed through `claude mcp add-json` and
+  `claude mcp remove`; the file is only read. The tool may store an entry
+  in a different form, which is why the state keeps `source` next to `hash`.
 - **`sync --auto` is silent and never fails.** A tool may feed a session
   hook's output to the model, and a broken sync must not block a session.
   The outcome goes to the status file that `autosync status` reads.
@@ -91,8 +99,11 @@ in a temporary home. Add a test there for every user-visible behaviour.
    `copilot-instructions.md`, layering, path-scoped instruction files (done)
 4. Agents and prompts, with frontmatter translation per target (done)
 5. Automatic sync, `sync --check` for CI, `doctor` (done)
-6. MCP servers and hooks, allowed per registry
+6. MCP servers, allowed per registry (done)
 7. Installation with Homebrew through a tap
+8. Hooks from registries: Claude Code and Copilot use different schemas and
+   event names, and hooks execute code, so they need a translation layer
+   and the same permission as MCP servers
 
 ## Workflow
 

@@ -51,6 +51,11 @@ type Snapshot struct {
 	Agents     []Doc
 	AllPrompts []Doc
 	Prompts    []Doc
+	// MCP holds the selected MCP servers. It stays empty unless the
+	// subscriber allowed them; MCPBlocked then counts what was held back.
+	AllMCP     []MCPServer
+	MCP        []MCPServer
+	MCPBlocked int
 	Warnings   []string
 }
 
@@ -174,6 +179,27 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 				return nil, err
 			}
 			snap.Prompts, warnings = pick(prompts, names, docName, warnings, "a group lists prompt %q, which is not in the registry")
+		}
+	}
+	if r.Wants(config.KindMCP) {
+		servers, mwarn, err := DiscoverMCP(root)
+		if err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, mwarn...)
+		snap.AllMCP = servers
+		selected := servers
+		if len(groups) > 0 {
+			names, err := manifest.MCP(groups)
+			if err != nil {
+				return nil, err
+			}
+			selected, warnings = pick(servers, names, func(m MCPServer) string { return m.Name }, warnings, "a group lists MCP server %q, which is not in the registry")
+		}
+		if r.Allows(config.KindMCP) {
+			snap.MCP = selected
+		} else {
+			snap.MCPBlocked = len(selected)
 		}
 	}
 	snap.Warnings = warnings

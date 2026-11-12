@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/graemer-org/spellbook/internal/config"
+	"github.com/graemer-org/spellbook/internal/ojson"
 )
 
 // marker identifies a hook command as Spellbook's.
@@ -144,24 +145,22 @@ func withoutOurs(entries []json.RawMessage) []json.RawMessage {
 // settings file. Every other setting, and the order of the keys, stays as
 // it is.
 func editClaudeSettings(path string, edit func([]json.RawMessage) ([]json.RawMessage, error)) error {
-	settings := &object{}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if len(bytes.TrimSpace(data)) > 0 {
-		if settings, err = parseObject(data); err != nil {
-			return fmt.Errorf("%s is not valid JSON, so it was left alone: %w", path, err)
-		}
+	settings, err := ojson.Parse(data)
+	if err != nil {
+		return fmt.Errorf("%s is not valid JSON, so it was left alone: %w", path, err)
 	}
-	hooks := &object{}
-	if raw, ok := settings.get("hooks"); ok {
-		if hooks, err = parseObject(raw); err != nil {
+	hooks := &ojson.Object{}
+	if raw, ok := settings.Get("hooks"); ok {
+		if hooks, err = ojson.Parse(raw); err != nil {
 			return fmt.Errorf("%s: \"hooks\" is not an object, so the file was left alone", path)
 		}
 	}
 	var entries []json.RawMessage
-	if raw, ok := hooks.get("SessionStart"); ok {
+	if raw, ok := hooks.Get("SessionStart"); ok {
 		if err := json.Unmarshal(raw, &entries); err != nil {
 			return fmt.Errorf("%s: \"hooks.SessionStart\" is not a list, so the file was left alone", path)
 		}
@@ -171,25 +170,24 @@ func editClaudeSettings(path string, edit func([]json.RawMessage) ([]json.RawMes
 		return err
 	}
 	if len(entries) == 0 {
-		hooks.remove("SessionStart")
+		hooks.Remove("SessionStart")
 	} else {
 		raw, err := json.Marshal(entries)
 		if err != nil {
 			return err
 		}
-		hooks.set("SessionStart", raw)
+		hooks.Set("SessionStart", raw)
 	}
-	if len(hooks.keys) == 0 {
-		settings.remove("hooks")
+	if hooks.Len() == 0 {
+		settings.Remove("hooks")
 	} else {
-		settings.set("hooks", hooks.marshal())
+		settings.Set("hooks", hooks.Marshal())
 	}
-	var out bytes.Buffer
-	if err := json.Indent(&out, settings.marshal(), "", "  "); err != nil {
+	out, err := settings.Indented()
+	if err != nil {
 		return err
 	}
-	out.WriteByte('\n')
-	return writeFile(path, out.Bytes())
+	return writeFile(path, out)
 }
 
 func writeFile(path string, data []byte) error {
@@ -201,85 +199,4 @@ func writeFile(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
-}
-
-// object is a JSON object that remembers the order of its keys.
-type object struct {
-	keys   []string
-	values map[string]json.RawMessage
-}
-
-func parseObject(data []byte) (*object, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	tok, err := dec.Token()
-	if err != nil {
-		return nil, err
-	}
-	if d, ok := tok.(json.Delim); !ok || d != '{' {
-		return nil, fmt.Errorf("expected a JSON object")
-	}
-	o := &object{values: map[string]json.RawMessage{}}
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
-			return nil, err
-		}
-		key, ok := tok.(string)
-		if !ok {
-			return nil, fmt.Errorf("expected a key")
-		}
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			return nil, err
-		}
-		o.set(key, raw)
-	}
-	if _, err := dec.Token(); err != nil {
-		return nil, err
-	}
-	return o, nil
-}
-
-func (o *object) get(key string) (json.RawMessage, bool) {
-	raw, ok := o.values[key]
-	return raw, ok
-}
-
-func (o *object) set(key string, raw json.RawMessage) {
-	if o.values == nil {
-		o.values = map[string]json.RawMessage{}
-	}
-	if _, ok := o.values[key]; !ok {
-		o.keys = append(o.keys, key)
-	}
-	o.values[key] = raw
-}
-
-func (o *object) remove(key string) {
-	if _, ok := o.values[key]; !ok {
-		return
-	}
-	delete(o.values, key)
-	for i, k := range o.keys {
-		if k == key {
-			o.keys = append(o.keys[:i], o.keys[i+1:]...)
-			break
-		}
-	}
-}
-
-func (o *object) marshal() []byte {
-	var b bytes.Buffer
-	b.WriteByte('{')
-	for i, k := range o.keys {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		key, _ := json.Marshal(k)
-		b.Write(key)
-		b.WriteByte(':')
-		b.Write(o.values[k])
-	}
-	b.WriteByte('}')
-	return b.Bytes()
 }

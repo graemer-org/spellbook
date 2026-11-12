@@ -171,6 +171,9 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Added registry %s (%d skills, %d instructions, %d agents, %d prompts at %s)\n", reg.Name, len(snap.Skills), len(snap.Instructions), len(snap.Agents), len(snap.Prompts), short(snap.Commit))
+			if snap.MCPBlocked > 0 {
+				fmt.Fprintf(out, "It also offers %d MCP servers. They start programs or connect to services, so they\nare only installed after: spellbook registry allow %s mcp\n", snap.MCPBlocked, reg.Name)
+			}
 			if noSync {
 				return nil
 			}
@@ -182,7 +185,8 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	add.Flags().IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
 	add.Flags().StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
 	add.Flags().StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
-	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions, agents, prompts; repeatable")
+	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions, agents, prompts, mcp; repeatable")
+	add.Flags().StringSliceVar(&reg.Allow, "allow", nil, "let the registry install this guarded kind: mcp; repeatable")
 	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of installed names: 'all', or 'collisions' for taken names only")
 	add.Flags().BoolVar(&noSync, "no-sync", false, "add the registry without syncing")
 
@@ -281,7 +285,53 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 		},
 	}
 
-	cmd.AddCommand(add, list, remove, setup)
+	// permit adds or removes guarded kinds of a registry and syncs.
+	permit := func(cmd *cobra.Command, args []string, allow bool) error {
+		loc, err := locate()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(loc)
+		if err != nil {
+			return err
+		}
+		for i := range cfg.Registries {
+			r := &cfg.Registries[i]
+			if r.Name != args[0] {
+				continue
+			}
+			for _, kind := range args[1:] {
+				if !slices.Contains(config.GuardedKinds, kind) {
+					return fmt.Errorf("%q is not a kind that needs to be allowed (those are: %s)", kind, strings.Join(config.GuardedKinds, ", "))
+				}
+				r.Allow = slices.DeleteFunc(r.Allow, func(k string) bool { return k == kind })
+				if allow {
+					r.Allow = append(r.Allow, kind)
+				}
+			}
+			if err := config.Save(loc, cfg); err != nil {
+				return err
+			}
+			return runSync(cmd, loc, cfg, syncer.Options{})
+		}
+		return fmt.Errorf("no registry named %q", args[0])
+	}
+	allow := &cobra.Command{
+		Use:   "allow <registry> <kind>...",
+		Short: "Let a registry install a guarded kind of resource (mcp) and sync",
+		Long: "MCP servers start programs or connect to services on your machine, so a\n" +
+			"registry only installs them after you allowed it to.",
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error { return permit(cmd, args, true) },
+	}
+	disallow := &cobra.Command{
+		Use:   "disallow <registry> <kind>...",
+		Short: "Take the permission back and remove what was installed",
+		Args:  cobra.MinimumNArgs(2),
+		RunE:  func(cmd *cobra.Command, args []string) error { return permit(cmd, args, false) },
+	}
+
+	cmd.AddCommand(add, list, remove, setup, allow, disallow)
 	return cmd
 }
 
@@ -675,7 +725,11 @@ func printReport(cmd *cobra.Command, rep *syncer.Report) {
 		if r.Previous != "" && r.Previous != r.Commit {
 			was = fmt.Sprintf(" (was %s)", short(r.Previous))
 		}
-		fmt.Fprintf(out, "%-12s %d skills, %d instructions, %d agents, %d prompts at %s%s\n", r.Name, r.Skills, r.Instructions, r.Agents, r.Prompts, short(r.Commit), was)
+		mcp := fmt.Sprintf("%d MCP servers", r.MCP)
+		if r.MCPBlocked > 0 {
+			mcp = fmt.Sprintf("%d MCP servers not allowed", r.MCPBlocked)
+		}
+		fmt.Fprintf(out, "%-12s %d skills, %d instructions, %d agents, %d prompts, %s at %s%s\n", r.Name, r.Skills, r.Instructions, r.Agents, r.Prompts, mcp, short(r.Commit), was)
 	}
 	names := make([]string, 0, len(rep.Targets))
 	for n := range rep.Targets {
