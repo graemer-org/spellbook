@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 260" width="820" height="260" role="img" aria-labelledby="t d">
+  <title id="t">Spellbook</title>
+  <desc id="d">An open spell book. Sparkles twinkle above it and small glyphs for skills, instructions, agents and commands rise from its pages.</desc>
+  <style>
+    .word { font: 700 68px Georgia, "Times New Roman", serif; fill: #8b5cf6; letter-spacing: 1px; }
+    .tag  { font: 400 18px -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #8b949e; }
+    .glyph { font: 700 17px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #f59e0b; text-anchor: middle; }
+    .ink  { stroke: #c4b5fd; stroke-width: 3; stroke-linecap: round; fill: none; }
+
+    .book   { animation: bob 4s ease-in-out infinite; }
+    .glow   { animation: glow 4s ease-in-out infinite; transform-origin: 170px 150px; }
+    .spark  { animation: twinkle 2.4s ease-in-out infinite; transform-origin: 0 0; }
+    .rise   { animation: rise 5s ease-out infinite; opacity: 0; }
+    .d1 { animation-delay: -0.6s; } .d2 { animation-delay: -1.3s; } .d3 { animation-delay: -1.9s; }
+    .r1 { animation-delay: -1.25s; } .r2 { animation-delay: -2.5s; } .r3 { animation-delay: -3.75s; }
+
+    @keyframes bob     { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+    @keyframes glow    { 0%, 100% { opacity: .25; transform: scale(.92); } 50% { opacity: .5; transform: scale(1.05); } }
+    @keyframes twinkle { 0%, 100% { opacity: .15; transform: scale(.5) rotate(0deg); } 50% { opacity: 1; transform: scale(1) rotate(45deg); } }
+    @keyframes rise    { 0% { opacity: 0; transform: translateY(0); } 15% { opacity: 1; } 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(-92px); } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .book, .glow, .spark, .rise { animation: none; }
+      .rise { opacity: 1; }
+    }
+  </style>
+
+  <defs>
+    <radialGradient id="aura" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#f59e0b" stop-opacity=".9"/>
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <path id="star" d="M0 -9 L2.2 -2.2 L9 0 L2.2 2.2 L0 9 L-2.2 2.2 L-9 0 L-2.2 -2.2 Z"/>
+  </defs>
+
+  <ellipse class="glow" cx="170" cy="150" rx="150" ry="100" fill="url(#aura)"/>
+
+  <!-- What the book hands out: a prompt, a rule, an agent, a command. -->
+  <g class="rise"><text class="glyph" x="118" y="112">{ }</text></g>
+  <g class="rise r1"><text class="glyph" x="216" y="118">&gt;_</text></g>
+  <g class="rise r2"><text class="glyph" x="150" y="104">#</text></g>
+  <g class="rise r3"><text class="glyph" x="190" y="108">@</text></g>
+
+  <g class="book">
+    <!-- Cover -->
+    <path d="M170 116 C138 102 92 102 58 113 L58 200 C92 189 138 189 170 203 C202 189 248 189 282 200 L282 113 C248 102 202 102 170 116 Z" fill="#5b21b6"/>
+    <!-- Pages -->
+    <path d="M170 108 C140 95 98 95 66 105 L66 190 C98 180 140 180 170 193 Z" fill="#faf5ff"/>
+    <path d="M170 108 C200 95 242 95 274 105 L274 190 C242 180 200 180 170 193 Z" fill="#f3e8ff"/>
+    <path d="M170 108 L170 193" stroke="#a78bfa" stroke-width="2"/>
+    <!-- Writing -->
+    <path class="ink" d="M84 122 C104 116 130 116 152 122 M84 138 C104 132 130 132 152 138 M84 154 C100 149 118 148 134 151"/>
+    <path class="ink" d="M188 122 C210 116 236 116 256 122 M188 138 C210 132 236 132 256 138"/>
+    <use href="#star" x="222" y="162" fill="#f59e0b"/>
+    <!-- Ribbon -->
+    <path d="M196 186 L196 222 L204 214 L212 222 L212 189 Z" fill="#f59e0b"/>
+  </g>
+
+  <g transform="translate(70 62)"><use class="spark" href="#star" fill="#f59e0b"/></g>
+  <g transform="translate(262 56)"><use class="spark d1" href="#star" fill="#a78bfa"/></g>
+  <g transform="translate(168 34)"><use class="spark d2" href="#star" fill="#f59e0b"/></g>
+  <g transform="translate(300 150)"><use class="spark d3" href="#star" fill="#f59e0b"/></g>
+  <g transform="translate(36 148)"><use class="spark d2" href="#star" fill="#a78bfa"/></g>
+
+  <text class="word" x="340" y="142">Spellbook</text>
+  <text class="tag" x="343" y="178">Shared spells for Claude Code and GitHub Copilot</text>
+</svg>

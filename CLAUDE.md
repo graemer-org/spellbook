@@ -91,6 +91,14 @@ go vet ./... && gofmt -l .    # must be clean before committing
 - Project (`--project`): `spellbook.toml` in the project root, found by
   walking up from the working directory; writes into the repository.
 
+## Open source
+
+The project is licensed under Apache-2.0 (`LICENSE`, `NOTICE`). The README
+is written for three readers in this order: one person, a project, an
+organization. `CONTRIBUTING.md` and `SECURITY.md` must stay in step with
+the commands and the permission model. The logo is the animated
+`assets/spellbook.svg`; it has to read well on a light and on a dark page.
+
 ## Testing
 
 Tests in `internal/cli` run the real command against local git repositories

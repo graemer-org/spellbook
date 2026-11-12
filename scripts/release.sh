@@ -51,6 +51,7 @@ class Spellbook < Formula
   desc "Share AI skills, instructions, agents and MCP servers from git registries"
   homepage "https://github.com/${repo}"
   version "${version}"
+  license "Apache-2.0"
 
   on_macos do
     on_arm do

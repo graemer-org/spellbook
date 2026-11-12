@@ -1,15 +1,54 @@
-# Spellbook
+<p align="center">
+  <img src="assets/spellbook.svg" alt="Spellbook: shared spells for Claude Code and GitHub Copilot" width="760">
+</p>
 
-Subscribe to git repositories that hold AI tooling and keep Claude Code and
-GitHub Copilot in sync with them.
+<p align="center">
+  <a href="https://github.com/graemer-org/spellbook/actions/workflows/ci.yml"><img src="https://github.com/graemer-org/spellbook/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/graemer-org/spellbook/releases/latest"><img src="https://img.shields.io/github/v/release/graemer-org/spellbook" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+</p>
 
-A team keeps its skills, instructions, agents, prompts, MCP servers and hooks
-in one repository.
-Everyone subscribes once, and `spellbook sync` installs what is new, updates
-what changed and removes what was deleted, for both tools at the same time.
+Spellbook keeps your team's AI tooling in git and installs it into Claude
+Code and GitHub Copilot.
 
-> **Status:** early. Skills, instructions, agents, prompts, MCP servers,
-> hooks, team groups, the lock file and automatic sync work today.
+Write a skill, an instruction, an agent, a prompt, an MCP server or a hook
+once, in a git repository. Everyone who subscribes gets it in both tools,
+and `spellbook sync` brings every later change: new things are installed,
+changed things updated, deleted things removed.
+
+```sh
+brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
+brew install spellbook
+
+spellbook init
+spellbook registry add acme git@github.com:acme/ai-registry.git
+spellbook autosync enable
+```
+
+## What it syncs
+
+| | What it is | Claude Code | GitHub Copilot |
+|---|---|:-:|:-:|
+| Skills | Instructions and scripts the agent loads when a task calls for them | ✓ | ✓ |
+| Instructions | Standing guidance, always on or limited to certain files | ✓ | ✓ |
+| Agents | Specialists with their own prompt, tools and model | ✓ | ✓ |
+| Prompts | Reusable tasks you start yourself | ✓ | in projects |
+| MCP servers | Connections to external tools and data | ✓ | ✓ |
+| Hooks | Commands that run when something happens in a session | ✓ | ✓ |
+
+Each one is written once in the registry and rendered in the format each
+tool expects.
+
+## Contents
+
+- [Install](#install)
+- [Use it for yourself](#use-it-for-yourself)
+- [Use it in a project](#use-it-in-a-project)
+- [Use it in an organization](#use-it-in-an-organization)
+- [Writing a registry](#writing-a-registry)
+- [Reference](#reference)
+- [What Spellbook will and will not touch](#what-spellbook-will-and-will-not-touch)
+- [Contributing](#contributing)
 
 ## Install
 
@@ -20,90 +59,215 @@ brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
 brew install spellbook
 ```
 
-Or with Go:
+With Go:
 
 ```sh
 go install github.com/graemer-org/spellbook/cmd/spellbook@latest
 ```
 
+Or download an archive from the
+[releases page](https://github.com/graemer-org/spellbook/releases).
 Spellbook needs `git` on the `PATH`.
 
-## Quick start
+## Use it for yourself
+
+You want the same skills and habits on every machine and in every project.
+
+**1. Set up.** This creates `~/.config/spellbook/config.toml` and enables
+both tools.
 
 ```sh
 spellbook init
-spellbook registry add acme git@github.com:acme/ai-registry.git
-spellbook list
 ```
 
-After that, `spellbook sync` picks up whatever changed upstream. To have
-that happen on its own, run `spellbook autosync enable`.
+**2. Subscribe.** Any git repository that contains skills works, including
+public collections. Take all of it or name what you want:
 
-## Home and project
+```sh
+spellbook registry add anthropic https://github.com/anthropics/skills --skill pdf --skill docx
+```
 
-Spellbook works on two levels. They are independent, and you can use both.
+**3. Keep your own spells in a repository.** `registry setup` creates the
+skeleton; push it wherever you keep your code and subscribe to it.
 
-| | Home | Project (`--project`) |
-|---|---|---|
-| Config | `~/.config/spellbook/config.toml` | `spellbook.toml` in the project root |
-| Claude Code skills | `~/.claude/skills/` | `.claude/skills/` |
-| GitHub Copilot skills | `~/.copilot/skills/` | `.github/skills/` |
-| Claude Code instructions | `~/.claude/rules/` | `.claude/rules/` |
-| GitHub Copilot instructions | `~/.copilot/copilot-instructions.md`, `~/.copilot/instructions/` | `.github/copilot-instructions.md`, `.github/instructions/` |
-| State | `~/.config/spellbook/state.json` | `.spellbook/state.json` |
-| Claude Code agents | `~/.claude/agents/` | `.claude/agents/` |
-| GitHub Copilot agents | `~/.copilot/agents/` | `.github/agents/` |
-| Claude Code prompts | `~/.claude/skills/` (as a skill) | `.claude/skills/` (as a skill) |
-| GitHub Copilot prompts | not supported by Copilot | `.github/prompts/` |
-| Claude Code MCP servers | `~/.claude.json`, through the `claude` command | `.mcp.json` |
-| GitHub Copilot MCP servers | `~/.copilot/mcp-config.json` | `.github/mcp.json` |
-| Claude Code hooks | `~/.claude/settings.json` | `.claude/settings.json` |
-| GitHub Copilot hooks | `~/.copilot/hooks/spellbook-hooks.json` | `.github/hooks/spellbook-hooks.json` |
-| Lock file | `~/.config/spellbook/spellbook.lock` | `spellbook.lock` |
+```sh
+spellbook registry setup ~/code/my-spells
+cd ~/code/my-spells && git init && git add -A && git commit -m "My spells"
+# create an empty repository at your git host, then:
+git remote add origin git@github.com:you/my-spells.git && git push -u origin main
 
-In a project, Spellbook writes real copies into the repository. Commit them
-together with `spellbook.toml`, `spellbook.lock` and `.spellbook/state.json`,
-so GitHub workflows and teammates see the same files.
+spellbook registry add mine git@github.com:you/my-spells.git
+```
+
+From now on you edit a skill in that repository, push, and every machine
+picks it up.
+
+**4. Let it update on its own.**
+
+```sh
+spellbook autosync enable
+```
+
+Both tools then run a sync when a session starts, at most once a day, in
+the background.
+
+Useful along the way:
+
+```sh
+spellbook list      # what is installed, and from where
+spellbook diff      # what changed upstream since the last sync
+spellbook sync      # update now
+spellbook doctor    # check the setup
+```
+
+At this level Spellbook writes below your home directory, for example
+`~/.claude/skills/` and `~/.copilot/skills/`, so everything applies in every
+project you open.
+
+## Use it in a project
+
+You want everyone who works on a repository, and every agent that runs
+there, to get the same tooling, without anyone installing anything.
+
+**1. Set up inside the repository.**
 
 ```sh
 cd my-repo
 spellbook init --project
-spellbook registry add acme git@github.com:acme/ai-registry.git --project
-git add spellbook.toml spellbook.lock .spellbook .claude .github
+spellbook registry add acme git@github.com:acme/ai-registry.git --project --group backend
 ```
 
-## Commands
+Spellbook writes real files into the repository: `.claude/skills/`,
+`.github/skills/`, `.claude/rules/`, `.github/copilot-instructions.md` and
+so on.
+
+**2. Commit them.**
 
 ```sh
-spellbook init [--project] [--target claude] [--target copilot]
-
-spellbook registry add <name> <git-url> [--ref main] [--path teams/platform]
-                       [--group platform]... [--skill name]...
-                       [--only skills|instructions|agents|prompts|mcp|hooks]...
-                       [--allow mcp|hooks]...
-                       [--priority 10] [--prefix all|collisions] [--no-sync]
-spellbook registry list
-spellbook registry remove <name> [--force]
-spellbook registry setup <directory>
-spellbook registry allow <name> mcp|hooks...
-spellbook registry disallow <name> mcp|hooks...
-
-spellbook group list <registry>
-spellbook group join <registry> <group>...
-spellbook group leave <registry> <group>...
-
-spellbook sync [--dry-run] [--force] [--locked] [--check]
-spellbook diff [registry] [--patch]
-spellbook list
-
-spellbook autosync enable|disable|status
-spellbook doctor [--offline]
+git add spellbook.toml spellbook.lock .spellbook .claude .github
+git commit -m "Add shared AI tooling"
 ```
 
-Every command takes `--project` (`-p`) to work on the project instead of the
-home configuration.
+Teammates get the tooling with `git pull`. They do not need Spellbook, and
+neither do cloud agents or GitHub workflows, because the files are simply
+part of the repository.
 
-## Registries
+**3. Update deliberately.** Whoever maintains the setup reviews what changed
+upstream and commits the result like any other change:
+
+```sh
+spellbook diff --project --patch   # what would change
+spellbook sync --project           # apply it and update spellbook.lock
+git add -A && git commit -m "Update shared AI tooling"
+```
+
+**4. Guard it in CI.** `sync --check` changes nothing and fails when the
+committed files differ from what `spellbook.lock` describes, for example
+because someone edited a synced file by hand.
+
+```yaml
+- run: spellbook sync --project --check
+```
+
+`spellbook sync --project --locked` reproduces exactly the locked state,
+which is what you want on a fresh checkout or after resolving a conflict.
+
+Home and project are independent. You can have your personal spells at home
+and a project's own set in the repository at the same time.
+
+## Use it in an organization
+
+You want company standards for everyone, team tooling for each team, and a
+way to change both that is reviewed like code.
+
+### One registry, groups per team
+
+Create a registry repository and sort its content into groups. A group can
+include another, so every team starts from the company baseline:
+
+```toml
+# registry.toml
+version = 1
+default_groups = ["base"]
+
+[groups.base]
+description = "For everyone"
+instructions = ["company-standards", "security-basics"]
+skills = ["code-review", "commit-style"]
+
+[groups.platform]
+description = "Platform team"
+include = ["base"]
+skills = ["terraform-review"]
+instructions = ["terraform-style"]
+agents = ["infra-reviewer"]
+mcp = ["internal-docs"]
+
+[groups.frontend]
+description = "Frontend guild"
+include = ["base"]
+skills = ["a11y-check"]
+```
+
+Someone who subscribes without choosing a group gets `default_groups`.
+People join the groups of the teams they work with:
+
+```sh
+spellbook group list acme
+spellbook group join acme platform
+spellbook group leave acme frontend
+```
+
+### Onboarding in three commands
+
+Put this into your onboarding guide or setup script:
+
+```sh
+brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook && brew install spellbook
+spellbook init && spellbook registry add acme git@github.com:acme/ai-registry.git --group platform
+spellbook autosync enable
+```
+
+Spellbook fetches with your own `git`, so whatever lets you clone the
+registry (SSH keys, a credential helper, single sign-on) is all the access
+control there is to set up. A repository it cannot reach is reported as an
+error.
+
+### Several registries, layered
+
+A company registry and a team registry can be combined. `--priority`
+decides the order instructions are read in and who wins a name collision;
+`--prefix collisions` keeps both versions when names clash.
+
+```sh
+spellbook registry add company git@github.com:acme/ai-company.git --priority 100
+spellbook registry add team git@github.com:acme/ai-platform.git --prefix collisions
+```
+
+### Change control
+
+The registry is an ordinary repository, so the usual tools apply.
+
+- **Review.** Protect the main branch and require pull requests. A change
+  to an instruction or a skill changes what every agent in the company
+  does, so review it like code.
+- **Ownership.** A `CODEOWNERS` file gives each team its own folders.
+- **Staged rollout.** Let most people follow a `stable` branch or a tag
+  with `--ref stable`, and a few follow `main`.
+- **Things that run code.** MCP servers and hooks are only installed where
+  the person allowed them with `spellbook registry allow acme mcp hooks`.
+  Publishing one in the registry does not put it on anyone's machine.
+- **No secrets.** Refer to environment variables such as `${DOCS_TOKEN}`
+  in MCP server definitions. Never commit a token to the registry.
+
+### Projects
+
+For repositories, use the project setup from the section above and add
+`spellbook sync --project --check` to CI. That way a repository carries a
+pinned, reviewed copy of the organization's tooling, and cloud agents see
+it too.
+
+## Writing a registry
 
 Any git repository works as a registry.
 
@@ -338,7 +502,60 @@ To keep both, give a registry a prefix:
 
 Spellbook rewrites the `name` in the skill's frontmatter to match.
 
-## Reviewing and pinning updates
+## Reference
+
+### Commands
+
+```sh
+spellbook init [--project] [--target claude] [--target copilot]
+
+spellbook registry add <name> <git-url> [--ref main] [--path teams/platform]
+                       [--group platform]... [--skill name]...
+                       [--only skills|instructions|agents|prompts|mcp|hooks]...
+                       [--allow mcp|hooks]...
+                       [--priority 10] [--prefix all|collisions] [--no-sync]
+spellbook registry list
+spellbook registry remove <name> [--force]
+spellbook registry setup <directory>
+spellbook registry allow <name> mcp|hooks...
+spellbook registry disallow <name> mcp|hooks...
+
+spellbook group list <registry>
+spellbook group join <registry> <group>...
+spellbook group leave <registry> <group>...
+
+spellbook sync [--dry-run] [--force] [--locked] [--check]
+spellbook diff [registry] [--patch]
+spellbook list
+
+spellbook autosync enable|disable|status
+spellbook doctor [--offline]
+```
+
+Every command takes `--project` (`-p`) to work on the project instead of the
+home configuration.
+
+### Where things go
+
+| | Home | Project (`--project`) |
+|---|---|---|
+| Config | `~/.config/spellbook/config.toml` | `spellbook.toml` in the project root |
+| Claude Code skills | `~/.claude/skills/` | `.claude/skills/` |
+| GitHub Copilot skills | `~/.copilot/skills/` | `.github/skills/` |
+| Claude Code instructions | `~/.claude/rules/` | `.claude/rules/` |
+| GitHub Copilot instructions | `~/.copilot/copilot-instructions.md`, `~/.copilot/instructions/` | `.github/copilot-instructions.md`, `.github/instructions/` |
+| Claude Code agents | `~/.claude/agents/` | `.claude/agents/` |
+| GitHub Copilot agents | `~/.copilot/agents/` | `.github/agents/` |
+| Claude Code prompts | `~/.claude/skills/` (as a skill) | `.claude/skills/` (as a skill) |
+| GitHub Copilot prompts | not supported by Copilot | `.github/prompts/` |
+| Claude Code MCP servers | `~/.claude.json`, through the `claude` command | `.mcp.json` |
+| GitHub Copilot MCP servers | `~/.copilot/mcp-config.json` | `.github/mcp.json` |
+| Claude Code hooks | `~/.claude/settings.json` | `.claude/settings.json` |
+| GitHub Copilot hooks | `~/.copilot/hooks/spellbook-hooks.json` | `.github/hooks/spellbook-hooks.json` |
+| Lock file | `~/.config/spellbook/spellbook.lock` | `spellbook.lock` |
+| State | `~/.config/spellbook/state.json` | `.spellbook/state.json` |
+
+### Reviewing and pinning updates
 
 Every sync records the commit of each registry in `spellbook.lock`.
 
@@ -347,19 +564,13 @@ spellbook diff              # what changed upstream since the last sync
 spellbook diff acme --patch # with the textual difference
 spellbook sync              # move to the newest commits and update the lock
 spellbook sync --locked     # install exactly what the lock records
+spellbook sync --check      # fail if the installed files differ from the lock
 ```
 
-`sync --locked` is for teammates and CI: it reproduces the committed state
-and fails for a registry that is not in the lock file.
+### Automatic sync
 
-## Automatic sync
-
-```sh
-spellbook autosync enable
-```
-
-This installs a session hook in each enabled tool that runs
-`spellbook sync --auto` when a session starts:
+`spellbook autosync enable` installs a session hook in each enabled tool
+that runs `spellbook sync --auto` when a session starts:
 
 - Claude Code: an entry in `~/.claude/settings.json`. Your other settings
   and hooks stay as they are.
@@ -367,33 +578,10 @@ This installs a session hook in each enabled tool that runs
 
 The automatic sync runs at most once a day, in the background, prints
 nothing and never fails a session. `spellbook autosync status` shows when it
-last ran and whether it worked. Change the pace in the configuration:
+last ran and whether it worked. Set the pace with `autosync.interval` in the
+configuration.
 
-```toml
-[autosync]
-interval = "12h"
-```
-
-With `--project` the hooks go into the repository instead
-(`.claude/settings.json`, `.github/hooks/spellbook.json`), which then
-changes committed files whenever a teammate starts a session.
-
-## Checking a project in CI
-
-`spellbook sync --check` changes nothing and fails when the committed files
-differ from what `spellbook.lock` describes: a file was edited by hand, is
-missing, or someone changed `spellbook.toml` without syncing.
-
-```yaml
-- run: spellbook sync --project --check
-```
-
-## Troubleshooting
-
-`spellbook doctor` checks git, the configuration, whether each registry can
-be reached, and whether every installed file still matches what was synced.
-
-## Configuration
+### Configuration
 
 ```toml
 [targets.claude]
@@ -414,7 +602,15 @@ prefix = "collisions"              # or "all"
 # skills = ["terraform-review"]    # only these skills
 # only = ["skills"]                # only these kinds: skills, instructions, agents, prompts, mcp, hooks
 # allow = ["mcp", "hooks"]         # let this registry install MCP servers and hooks
+
+[autosync]
+interval = "12h"                   # default: 24h
 ```
+
+### Troubleshooting
+
+`spellbook doctor` checks git, the configuration, whether each registry can
+be reached, and whether every installed file still matches what was synced.
 
 ## What Spellbook will and will not touch
 
@@ -429,33 +625,12 @@ Spellbook records everything it installs and only ever changes those paths.
 - If a registry cannot be fetched, what it installed stays and the command
   exits with an error.
 
-## Roadmap
+## Contributing
 
-1. Core and skills — done
-2. `registry.toml` manifest, team groups, prefixes for collisions, lockfile, `diff` — done
-3. Instructions, layered (company, team) and path-scoped — done
-4. Agents and prompts — done
-5. Automatic sync, `sync --check` for CI, `doctor` — done
-6. MCP servers, allowed per registry — done
-7. Installation with Homebrew — done
-8. Hooks from registries — done
+Contributions are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) explains how
+to build, test and propose a change, and [SECURITY.md](SECURITY.md) how to
+report a vulnerability.
 
-## Development
+## License
 
-```sh
-go test ./...
-go vet ./... && gofmt -l .
-```
-
-### Releasing
-
-Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.org):
-`feat:` for something new, `fix:` for a repair, `feat!:` or a
-`BREAKING CHANGE:` footer for an incompatible change.
-
-[release-please](https://github.com/googleapis/release-please) reads them
-and keeps a release pull request open with the next version and the
-changelog. Merging that pull request creates the tag and the GitHub release.
-The workflow then builds archives for macOS and Linux on Intel and ARM, adds
-them to the release and commits the updated `Formula/spellbook.rb` to
-`main`, which is what `brew install spellbook` reads.
+Spellbook is licensed under the [Apache License 2.0](LICENSE).
