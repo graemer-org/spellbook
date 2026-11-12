@@ -1632,3 +1632,58 @@ func TestInterruptedSyncIsPickedUpAgain(t *testing.T) {
 		t.Errorf("a different file must not be taken over:\n%s", out)
 	}
 }
+
+func TestDoctorPointsOutWhatEverySessionCarries(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(t, filepath.Join(repo, "instructions", "huge.md"), strings.Repeat("Always do the right thing. ", 2500))
+	write(t, filepath.Join(repo, "instructions", "small.md"), "Be brief.\n")
+	write(t, filepath.Join(repo, "instructions", "scoped.md"), "---\npaths: [\"**/*.go\"]\n---\n"+strings.Repeat("Only for Go files. ", 4000))
+	write(t, filepath.Join(repo, "mcp", "docs.json"), `{"type": "http", "url": "https://mcp.example.com", "headers": {"Authorization": "Bearer ${SPELLBOOK_TEST_TOKEN}", "X-Region": "${SPELLBOOK_TEST_REGION:-eu}"}}`)
+	e.commit(repo, "big")
+	e.mustRun("init", "--target", "copilot")
+	e.mustRun("registry", "add", "acme", repo, "--allow", "mcp")
+
+	out := e.mustRun("doctor", "--offline")
+	if !strings.Contains(out, "warn  copilot reads 65 KB of instructions into every session") || !strings.Contains(out, "from 2 instructions") || !strings.Contains(out, "Largest: acme/huge") {
+		t.Errorf("doctor should point out the always-on instructions and leave the path-scoped one out:\n%s", out)
+	}
+	if !strings.Contains(out, `MCP server "docs" for copilot needs the environment variable SPELLBOOK_TEST_TOKEN`) {
+		t.Errorf("doctor should name the missing variable:\n%s", out)
+	}
+	if strings.Contains(out, "SPELLBOOK_TEST_REGION") {
+		t.Errorf("a variable with a default is not missing:\n%s", out)
+	}
+
+	t.Setenv("SPELLBOOK_TEST_TOKEN", "x")
+	e.mustRun("registry", "set", "acme", "--instruction", "small")
+	out = e.mustRun("doctor", "--offline")
+	if strings.Contains(out, "warn  copilot reads") || strings.Contains(out, "SPELLBOOK_TEST_TOKEN") || !strings.Contains(out, "ok    copilot reads") {
+		t.Errorf("with the large instruction gone and the variable set, both warnings should go:\n%s", out)
+	}
+}
+
+func TestDoctorSeesUpdatesAndUncommittedProjectFiles(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	project := t.TempDir()
+	t.Chdir(project)
+	e.git(project, "init", "--quiet", "-b", "main")
+	e.mustRun("init", "--project", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+
+	out := e.mustRun("doctor", "-p")
+	if !strings.Contains(out, "reachable and up to date") || !strings.Contains(out, "synced files or settings are not committed") {
+		t.Errorf("fresh project:\n%s", out)
+	}
+	e.commit(project, "add tooling")
+	if out := e.mustRun("doctor", "-p"); !strings.Contains(out, "everything synced is committed") {
+		t.Errorf("after committing:\n%s", out)
+	}
+
+	e.writeSkills(repo, map[string]string{"alpha": "v2"})
+	e.commit(repo, "v2")
+	if out := e.mustRun("doctor", "-p"); !strings.Contains(out, "registry acme has changes since the last sync") || !strings.Contains(out, "spellbook diff acme") {
+		t.Errorf("doctor should notice upstream changes:\n%s", out)
+	}
+}

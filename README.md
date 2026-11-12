@@ -639,8 +639,20 @@ interval = "12h"                   # default: 24h
 
 ### Troubleshooting
 
-`spellbook doctor` checks git, the configuration, whether each registry can
-be reached, and whether every installed file still matches what was synced.
+`spellbook doctor` checks the setup and says what to do about each finding:
+
+- git, the configuration, and whether each enabled tool is installed
+- whether each registry can be reached and has changes you have not synced
+- whether every installed file still matches what was synced, or was edited
+  or deleted
+- how much the installed instructions add to every session, and which are
+  the largest; the same for the number of skills
+- environment variables that installed MCP servers refer to but that are
+  not set
+- in a project, synced files that are not committed yet
+- an automatic sync that failed, never finished or has not run for long
+
+`--offline` skips the checks that contact the registries.
 
 ## What Spellbook will and will not touch
 

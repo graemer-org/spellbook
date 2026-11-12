@@ -25,6 +25,7 @@ func init() {
 	}
 	Register(Spec{
 		Name:          "copilot",
+		HomeDir:       ".copilot",
 		HomeSkills:    ".copilot/skills",
 		ProjectSkills: ".github/skills",
 		Instruction: func(loc config.Location, name string, scoped bool) (Place, bool) {

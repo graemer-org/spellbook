@@ -93,6 +93,10 @@ go vet ./... && gofmt -l .    # must be clean before committing
 - **A user's settings file keeps its content and key order.** Only the
   SessionStart entries that run Spellbook are added or removed, and a file
   that is not valid JSON is not touched.
+- **`doctor` reports, it never repairs.** It changes nothing, says for
+  every finding what the user can do, and fails only for what stops
+  Spellbook from working (git, configuration, an unreachable registry).
+  Everything else is a warning.
 - **`diff` changes nothing.** It never writes to targets, state or lock.
 
 ## Scopes

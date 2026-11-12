@@ -100,3 +100,42 @@ func Reachable(ctx context.Context, url string) error {
 	_, err := run(ctx, "", "ls-remote", "--quiet", url, "HEAD")
 	return err
 }
+
+// RemoteHead returns the commit a ref of the repository at url points at,
+// without fetching anything. An empty ref means the default branch.
+func RemoteHead(ctx context.Context, url, ref string) (string, error) {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	// For an annotated tag the second pattern yields the commit behind it.
+	out, err := run(ctx, "", "ls-remote", "--quiet", url, ref, ref+"^{}")
+	if err != nil {
+		return "", err
+	}
+	commit := ""
+	for _, line := range strings.Split(out, "\n") {
+		sha, name, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		if commit == "" || strings.HasSuffix(name, "^{}") {
+			commit = sha
+		}
+	}
+	return commit, nil
+}
+
+// Uncommitted returns how many of the given paths in the repository at dir
+// have changes that are not committed. It returns -1 when dir is not
+// inside a git repository.
+func Uncommitted(ctx context.Context, dir string, paths []string) int {
+	if _, err := run(ctx, dir, "rev-parse", "--is-inside-work-tree"); err != nil {
+		return -1
+	}
+	args := append([]string{"status", "--porcelain", "--untracked-files=all", "--"}, paths...)
+	out, err := run(ctx, dir, args...)
+	if err != nil || out == "" {
+		return 0
+	}
+	return len(strings.Split(out, "\n"))
+}

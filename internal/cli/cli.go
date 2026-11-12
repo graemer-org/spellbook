@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -1028,19 +1029,30 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 			}
 			ok("configuration %s", loc.ConfigPath)
 
+			home := loc.Scope == config.ScopeHome
 			targets := cfg.EnabledTargets()
 			if len(targets) == 0 {
 				fail("no target is enabled")
 			}
 			for _, t := range targets {
-				dir, err := target.SkillsDir(t, cfg.Targets[t], loc)
-				if err != nil {
+				if _, err := target.SkillsDir(t, cfg.Targets[t], loc); err != nil && !errors.Is(err, target.ErrUnsupported) {
 					fail("%s: %v", t, err)
 					continue
 				}
-				ok("target %s, skills in %s", t, dir)
-				if on, err := autosync.Installed(t, loc); err == nil && !on {
+				ok("target %s", t)
+				if d := target.HomeDir(t); home && d != "" {
+					if _, err := os.Stat(filepath.Join(loc.Root, d)); os.IsNotExist(err) {
+						warn("target %s is enabled, but there is no ~/%s; is the tool installed?", t, d)
+					}
+				}
+				on, err := autosync.Installed(t, loc)
+				if err == nil && !on && home {
 					warn("target %s has no automatic sync; run 'spellbook autosync enable'", t)
+				}
+			}
+			if home && slices.Contains(targets, "claude") && slices.ContainsFunc(cfg.Registries, func(r config.Registry) bool { return r.Allows(config.KindMCP) }) {
+				if _, err := exec.LookPath("claude"); err != nil {
+					warn("MCP servers are allowed, but the 'claude' command is not on PATH; Claude Code's user-level servers cannot be changed without it")
 				}
 			}
 
@@ -1052,18 +1064,25 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 				fail("%v", err)
 			}
 			for _, r := range cfg.Registries {
+				var locked lock.Entry
+				synced := false
 				if lk != nil {
-					if _, synced := lk.Get(r.Name); !synced {
-						warn("registry %s was never synced; run 'spellbook sync'", r.Name)
-					}
+					locked, synced = lk.Get(r.Name)
+				}
+				if !synced {
+					warn("registry %s was never synced; run 'spellbook sync'", r.Name)
 				}
 				if offline {
 					continue
 				}
-				if err := gitx.Reachable(cmd.Context(), r.URL); err != nil {
+				head, err := gitx.RemoteHead(cmd.Context(), r.URL, r.Ref)
+				switch {
+				case err != nil:
 					fail("registry %s cannot be reached: %v", r.Name, err)
-				} else {
-					ok("registry %s is reachable", r.Name)
+				case synced && head != "" && head != locked.Commit && locked.URL == r.URL:
+					warn("registry %s has changes since the last sync (%s -> %s); see 'spellbook diff %s'", r.Name, short(locked.Commit), short(head), r.Name)
+				default:
+					ok("registry %s is reachable and up to date", r.Name)
 				}
 			}
 
@@ -1075,7 +1094,12 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 			if len(problems) == 0 {
 				ok("%d installed resources match what was synced", total)
 			}
-			for _, p := range problems {
+			const shown = 8
+			for i, p := range problems {
+				if i == shown {
+					warn("... and %d more resources that were edited or are missing", len(problems)-shown)
+					break
+				}
 				what := "was edited locally; 'spellbook sync --force' restores it"
 				if p.Missing {
 					what = "is missing; 'spellbook sync' restores it"
@@ -1083,14 +1107,88 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 				warn("%s %q for %s (%s) %s", p.Entry.Kind, p.Entry.Name, p.Entry.Target, p.Entry.Path, what)
 			}
 
-			if st, err := autosync.Load(loc); err == nil && st.LastError != "" && st.LastError != autosync.InProgress {
-				warn("the last automatic sync failed: %s", st.LastError)
+			// What the installed resources cost in every session.
+			inv, err := syncer.Inspect(loc)
+			if err != nil {
+				fail("%v", err)
+				return finish()
+			}
+			names := make([]string, 0, len(inv.Targets))
+			for t := range inv.Targets {
+				names = append(names, t)
+			}
+			sort.Strings(names)
+			for _, t := range names {
+				l := inv.Targets[t]
+				if l.AlwaysOnBytes > alwaysOnLimit {
+					var top []string
+					for i, s := range l.AlwaysOn {
+						if i == 3 {
+							break
+						}
+						top = append(top, fmt.Sprintf("%s (%s)", s.Name, size(s.Bytes)))
+					}
+					warn("%s reads %s of instructions into every session (about %d tokens, from %d instructions). Largest: %s. Limit them with groups, --instruction, or 'paths' in the registry",
+						t, size(l.AlwaysOnBytes), l.AlwaysOnBytes/4, len(l.AlwaysOn), strings.Join(top, ", "))
+				} else if len(l.AlwaysOn) > 0 {
+					ok("%s reads %s of instructions into every session", t, size(l.AlwaysOnBytes))
+				}
+				if l.Skills > skillsLimit {
+					warn("%s has %d skills installed; the description of each one is part of every session, and with this many a tool may not show them all. Limit them with groups or --skill", t, l.Skills)
+				}
+			}
+			for _, ref := range inv.MissingEnv {
+				warn("MCP server %q for %s needs the environment variable %s, which is not set", ref.Server, ref.Target, ref.Var)
+			}
+
+			if !home {
+				paths := []string{config.ProjectFile, config.LockFile, ".spellbook", ".claude", ".github", ".mcp.json"}
+				switch n := gitx.Uncommitted(cmd.Context(), loc.Root, paths); {
+				case n < 0:
+					warn("the project is not a git repository, so the synced files cannot be shared by committing them")
+				case n > 0:
+					warn("%d synced files or settings are not committed; teammates and cloud agents only get what is committed", n)
+				default:
+					ok("everything synced is committed")
+				}
+			}
+
+			st, err := autosync.Load(loc)
+			if err == nil {
+				interval, _ := cfg.AutoSync.ParseInterval(autosync.DefaultInterval)
+				switch {
+				case st.LastError == autosync.InProgress && time.Since(st.LastAttempt) > 30*time.Minute:
+					warn("an automatic sync started at %s and never finished; run 'spellbook sync'", st.LastAttempt.Format(time.RFC3339))
+				case st.LastError != "" && st.LastError != autosync.InProgress:
+					warn("the last automatic sync failed: %s", st.LastError)
+				case !st.LastSuccess.IsZero() && interval > 0 && time.Since(st.LastSuccess) > 3*interval:
+					warn("the last automatic sync was %s ago, although it should run every %s; start a session or run 'spellbook sync'", time.Since(st.LastSuccess).Round(time.Hour), interval)
+				}
 			}
 			return finish()
 		},
 	}
 	cmd.Flags().BoolVar(&offline, "offline", false, "do not contact the registries")
 	return cmd
+}
+
+// Above these amounts 'doctor' points out what the installed resources
+// add to every session.
+const (
+	// alwaysOnLimit is about 10,000 tokens of standing instructions.
+	alwaysOnLimit = 40_000
+	skillsLimit   = 150
+)
+
+// size formats a number of bytes for people.
+func size(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%d KB", n>>10)
+	}
+	return fmt.Sprintf("%d bytes", n)
 }
 
 func newList(locate func() (config.Location, error)) *cobra.Command {

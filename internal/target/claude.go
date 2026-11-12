@@ -18,6 +18,7 @@ import (
 func init() {
 	Register(Spec{
 		Name:          "claude",
+		HomeDir:       ".claude",
 		HomeSkills:    ".claude/skills",
 		ProjectSkills: ".claude/skills",
 		Instruction: func(loc config.Location, name string, scoped bool) (Place, bool) {

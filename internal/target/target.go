@@ -70,6 +70,11 @@ type Spec struct {
 	// frontmatter sections of agents, prompts and MCP servers.
 	Name string
 
+	// HomeDir is the directory the tool creates in the home directory when
+	// it is installed, such as ".claude". It lets 'doctor' notice a tool
+	// that is enabled but not there.
+	HomeDir string
+
 	// HomeSkills and ProjectSkills are the default skill directories,
 	// relative to the home directory and to the project root.
 	HomeSkills, ProjectSkills string
@@ -141,6 +146,10 @@ func Known(name string) bool {
 	_, ok := specs[name]
 	return ok
 }
+
+// HomeDir returns the directory the named tool keeps in the home
+// directory, or "" when that is not known.
+func HomeDir(name string) string { return specs[name].HomeDir }
 
 // ReadsProjectHooksOf returns the tools whose project hooks file the named
 // tool reads in addition to its own.
