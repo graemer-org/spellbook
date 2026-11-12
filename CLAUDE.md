@@ -109,7 +109,11 @@ go vet ./... && gofmt -l .    # must be clean before committing
   asks first, unless `--yes` is given. An MCP server definition with a
   value in `env` or `headers` that is not a `${VAR}` reference is refused,
   with the exact replacement to write; `--plain KEY` is the only way to
-  let a literal through. Hooks, when they are added, need the same care.
+  let a literal through. A hook's command is checked the same way.
+- **A pushed hook is adopted, not duplicated.** Push puts the marker behind
+  the command of the user's entry, so the sync later sees that entry as the
+  registry's hook. This is the one place where push edits a file of the
+  user; the preview says so.
 - **A pushed resource is pending.** It is recorded in the state with
   `pending`, is never pruned while the registry does not offer it, and is
   replaced by the registry's version once it does, unless it was edited.

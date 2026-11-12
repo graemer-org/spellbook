@@ -36,7 +36,7 @@ const (
 )
 
 // Kinds lists the kinds that can be pushed.
-var Kinds = []string{KindSkill, KindInstruction, KindAgent, KindPrompt, KindMCP}
+var Kinds = []string{KindSkill, KindInstruction, KindAgent, KindPrompt, KindMCP, KindHook}
 
 // Candidate is a resource found in the place where a tool reads it.
 type Candidate struct {
@@ -55,12 +55,17 @@ type Candidate struct {
 	// registry's version of it as this tool stores it.
 	entry []byte
 	base  string
+	// tomlHash is the hash of a Codex server as its TOML file holds it.
+	tomlHash string
 }
 
 // Current returns the hash of the resource as it is now.
 func (c Candidate) Current() string {
 	if c.Kind == KindMCP {
 		return entryHash(c.entry)
+	}
+	if c.StateKind == syncer.KindBlock {
+		return syncer.HashBytes(c.entry)
 	}
 	h, _ := syncer.HashPath(c.Path)
 	return h
@@ -79,21 +84,44 @@ func (c Candidate) stateKind() string {
 	return syncer.KindSkill
 }
 
-// PendingItem is what MarkPending needs to know about the candidate.
-func (c Candidate) PendingItem(loc config.Location, reg string) syncer.PendingItem {
-	p := syncer.PendingItem{Abs: c.Path, Kind: c.stateKind(), Name: c.Name, Target: c.Target, Registry: reg}
+// Pending returns what to record in the state for a pushed item, and false
+// when nothing is to be recorded. For a hook it also marks the user's
+// entry in the hooks file as the pushed hook.
+func (it Item) Pending(loc config.Location, reg string) (syncer.PendingItem, bool, error) {
+	c := it.Candidate
+	p := syncer.PendingItem{Abs: c.Path, Kind: c.stateKind(), Name: it.Name, Target: c.Target, Registry: reg}
 	if c.Managed && !c.Pending {
 		// The registry's version it was changed from.
 		p.Base = c.Hash
 	}
-	if c.Kind == KindMCP {
+	switch {
+	case it.noPending:
+		return p, false, nil
+	case c.Kind == KindHook:
+		// The item carries its registry name; the path still ends in the
+		// position of the entry.
+		file := c.Path[:strings.LastIndex(c.Path, "#")]
+		id := reg + "/" + it.Name
+		hash, err := syncer.AdoptHook(file, it.hookEvent, it.hookIndex, id)
+		if err != nil {
+			return p, false, err
+		}
+		p.Abs, p.Kind, p.Key, p.Hash = file, syncer.KindHook, syncer.StateKey(loc, file)+"#"+id, hash
+	case c.Kind == KindMCP:
 		file := strings.TrimSuffix(c.Path, "#"+c.Name)
 		p.Abs, p.Kind, p.Key, p.Hash = file, c.StateKind, syncer.StateKey(loc, file)+"#"+c.Name, entryHash(c.entry)
+		if c.tomlHash != "" {
+			p.Hash = c.tomlHash
+		}
 		if c.Managed && !c.Pending {
 			p.Base = c.base
 		}
+	case c.StateKind == syncer.KindBlock:
+		i := strings.LastIndex(c.Path, "#")
+		p.Abs, p.Kind, p.Key, p.Hash = c.Path[:i], syncer.KindBlock, syncer.StateKey(loc, c.Path[:i])+c.Path[i:], syncer.HashBytes(c.entry)
+		p.Name = c.Name
 	}
-	return p
+	return p, true, nil
 }
 
 // probe stands in for a name when asking a target where it keeps a kind.
@@ -163,7 +191,10 @@ func Candidates(loc config.Location, cfg *config.Config) ([]Candidate, error) {
 			files(KindPrompt, tool, place.Path)
 		}
 	}
-	mcpCandidates(loc, cfg, recorded, func(c Candidate) { out = append(out, c) })
+	more := func(c Candidate) { out = append(out, c) }
+	mcpCandidates(loc, cfg, recorded, more)
+	hookCandidates(loc, cfg, more)
+	blockCandidates(loc, recorded, more)
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if a.Kind != b.Kind {
@@ -193,11 +224,18 @@ type Item struct {
 	// Lossy is true when the tool's form holds only part of what the
 	// registry holds, so an update must keep the rest from the registry.
 	Lossy bool
+	// noPending is true for something that is not one resource of a tool,
+	// such as a whole hand-written file; nothing is recorded for it.
+	noPending bool
+	// hookEvent and hookIndex say which entry of the hooks file a hook is.
+	hookEvent string
+	hookIndex int
 }
 
 // Select picks the candidates the arguments name. An argument is a path,
 // or a kind followed by a name. from limits the choice to one tool.
-func Select(all []Candidate, args []string, from string, plain []string) ([]Item, error) {
+func Select(all []Candidate, args []string, opts Options) ([]Item, error) {
+	from := opts.From
 	var items []Item
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -224,11 +262,19 @@ func Select(all []Candidate, args []string, from string, plain []string) ([]Item
 					matches = append(matches, c)
 				}
 			}
+			if len(matches) == 0 && slices.Contains(instructionFiles, filepath.Base(abs)) {
+				it, err := buildWholeFile(abs, opts)
+				if err != nil {
+					return nil, fmt.Errorf("%s: %w", arg, err)
+				}
+				items = append(items, it)
+				continue
+			}
 			if len(matches) == 0 {
 				if _, err := os.Stat(abs); err != nil {
 					return nil, fmt.Errorf("%s does not exist", arg)
 				}
-				return nil, fmt.Errorf("%s is not in a place where an enabled tool reads skills, instructions, agents or prompts; run 'spellbook push' without arguments to see what can be pushed (an MCP server is named as 'mcp <name>')", arg)
+				return nil, fmt.Errorf("%s is not in a place where an enabled tool reads skills, instructions, agents or prompts; run 'spellbook push' without arguments to see what can be pushed (an MCP server is named as 'mcp <name>', a hook as 'hook <Event>:<number>')", arg)
 			}
 		}
 		if len(matches) == 0 {
@@ -248,14 +294,20 @@ func Select(all []Candidate, args []string, from string, plain []string) ([]Item
 		}
 		var built []Item
 		for _, c := range changed {
-			if c.Kind != KindMCP && c.Managed && !c.Pending && c.StateKind != c.stateKind() {
+			if c.Kind != KindMCP && c.StateKind != syncer.KindBlock && c.Managed && !c.Pending && c.StateKind != c.stateKind() {
 				return nil, fmt.Errorf("%s was installed from a %s in registry %s; pushing changes to it is not supported yet", what, c.StateKind, c.Registry)
 			}
 			var it Item
 			var err error
-			if c.Kind == KindMCP {
-				it, err = buildMCP(c, plain)
-			} else {
+			switch {
+			case c.Kind == KindMCP:
+				it, err = buildMCP(c, opts.Plain)
+			case c.Kind == KindHook:
+				it, err = buildHook(c, opts)
+			case c.StateKind == syncer.KindBlock:
+				it = Item{Candidate: c, Dest: registry.InstructionsDir + "/" + c.Name + ".md"}
+				it.Files = []gitx.File{{Path: it.Dest, Data: c.entry}}
+			default:
 				it, err = build(c)
 			}
 			if err != nil {
@@ -506,6 +558,11 @@ func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
 		return ""
 	}
 	switch it.Kind {
+	case KindHook:
+		if slices.ContainsFunc(snap.AllHooks, func(h registry.Hook) bool { return h.Name == it.Name }) {
+			return fmt.Errorf("the registry already has a hook named %q; choose another name with --name", it.Name)
+		}
+		return nil
 	case KindMCP:
 		return reconcileMCP(snap, it)
 	case KindSkill:
@@ -754,4 +811,20 @@ func pathKey(root, abs string) string {
 		return abs
 	}
 	return filepath.ToSlash(rel)
+}
+
+// GitHubRepo returns the repository in the form the gh command takes,
+// "owner/name" or "host/owner/name", and false when the URL is not a
+// GitHub one.
+func GitHubRepo(repo string) (string, bool) {
+	link := PullRequestURL(repo, "x")
+	rest, ok := strings.CutPrefix(link, "https://")
+	if !ok || !strings.Contains(link, "/compare/") {
+		return "", false
+	}
+	rest = rest[:strings.Index(rest, "/compare/")]
+	if slug, ok := strings.CutPrefix(rest, "github.com/"); ok {
+		return slug, true
+	}
+	return rest, true
 }

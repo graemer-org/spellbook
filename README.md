@@ -321,8 +321,9 @@ is reviewed like any other.
 - **It works out what you are pushing** from where the file lies: a skill,
   an instruction, an agent or a prompt, in the form of any of the five
   tools, including Cursor's `.mdc` rules, Codex's TOML agents and Gemini
-  CLI's TOML commands. An MCP server is named as `mcp <name>`, because it
-  is an entry in a configuration file. Hooks are not supported yet.
+  CLI's TOML commands. An MCP server is named as `mcp <name>` and a hook as
+  `hook <Event>:<number>`, because they are entries in a configuration
+  file; `spellbook push` without arguments lists them.
 - **It turns the tool's form into the registry's.** Copilot's `applyTo`
   becomes `paths`. Fields only one tool understands, such as an agent's
   `model`, move under that tool's name, and push tells you so.
@@ -351,8 +352,29 @@ is reviewed like any other.
   ```
 
   It checks the values in `env` and `headers`, values after flags such as
-  `--token`, and credentials in the URL. Servers in Codex's `config.toml`
-  are not read yet.
+  `--token`, and credentials in the URL. Servers from Codex's `config.toml`
+  are translated: its `bearer_token_env_var` becomes an `Authorization`
+  header that refers to the variable.
+- **Hooks.** A hook you wrote into Claude Code's `settings.json` or Codex's
+  `hooks.json` has no name, so give it one:
+
+  ```sh
+  spellbook push hook PreToolUse:2 --name no-force-push --to acme
+  ```
+
+  Push puts the comment `# spellbook:acme/no-force-push` behind the command
+  of your entry. That is how a later sync recognises it instead of adding
+  the hook a second time. A secret in the command is refused like one in an
+  MCP server. If the hook runs a script of yours, add the script in the
+  pull request. Hooks written for Cursor or Gemini CLI cannot be pushed,
+  because their events and input differ.
+- **A whole file of instructions.** `spellbook push CLAUDE.md --name
+  team-conventions` proposes the text you wrote in `CLAUDE.md`, `AGENTS.md`,
+  `GEMINI.md` or `copilot-instructions.md` as one instruction. The file
+  stays as it is; remove the text from it once the registry delivers it.
+- **A change inside a block.** If you edited an instruction inside
+  `copilot-instructions.md`, `AGENTS.md` or `GEMINI.md`, name it:
+  `spellbook push instruction company-standards --from copilot`.
 
 | Flag | Meaning |
 |---|---|
@@ -363,11 +385,12 @@ is reviewed like any other.
 | `--dry-run` | show what would be sent |
 | `--into ~/code/ai-registry` | write into your local clone instead of pushing |
 | `--yes` | do not ask |
-| `--plain LOG_LEVEL` | for an MCP server: this value is no secret |
+| `--plain LOG_LEVEL` | for an MCP server or hook: this value is no secret |
+| `--name` | the name in the registry, for a hook or a whole file |
+| `--pr` | also open the pull request, with GitHub's `gh` command |
 
-Changes to an always-on instruction for Copilot, which lives in a block of
-`copilot-instructions.md`, cannot be pushed yet. Edit the instruction's
-other copy, for example the file in `.claude/rules/`, and push that.
+Not supported: changes to a hook or to a Codex MCP server that came from
+the registry. Change those in the registry.
 
 ## Writing a registry
 
@@ -636,7 +659,7 @@ spellbook group leave <registry> <group>...
 
 spellbook sync [--dry-run] [--force] [--locked] [--check]
 spellbook diff [registry] [--patch]
-spellbook push [<path> | <kind> <name>]... [--to <registry>] [--group <group>]
+spellbook push [<path> | <kind> <name>]... [--to <registry>] [--group <group>] [--pr]
 spellbook list
 
 spellbook autosync enable|disable|status

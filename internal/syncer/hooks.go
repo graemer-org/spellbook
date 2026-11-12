@@ -223,6 +223,10 @@ func (r *run) applyHooks(want map[target.HookPlace][]hookWant) error {
 				r.entries = append(r.entries, e)
 			case !exists:
 				// Already gone.
+			case e.Pending:
+				// Pushed to the registry, which does not offer it yet, or
+				// may not install it here.
+				r.entries = append(r.entries, e)
 			case onDisk != e.Hash && !r.opts.Force:
 				r.counts(e.Target).Skipped++
 				r.warnf("%s: kept hook %q: it was edited in %s (use --force to remove)", e.Target, e.Name, place.File)
@@ -240,4 +244,78 @@ func (r *run) applyHooks(want map[target.HookPlace][]hookWant) error {
 		}
 	}
 	return nil
+}
+
+// LocalHook is an entry in a tool's hooks file that Spellbook did not
+// write.
+type LocalHook struct {
+	Event string
+	// Index counts the entries of the event, starting at 1.
+	Index int
+	Raw   json.RawMessage
+}
+
+// LocalHooks lists the hook entries in file that carry no Spellbook
+// marker and are not the automatic sync.
+func LocalHooks(file string) ([]LocalHook, error) {
+	hf, err := readHookFile(file)
+	if err != nil {
+		return nil, err
+	}
+	var out []LocalHook
+	for _, event := range hf.hooks.Keys() {
+		for i, raw := range hf.entries[event] {
+			if target.HookID(raw) != "" || strings.Contains(string(raw), "spellbook sync --auto") {
+				continue
+			}
+			out = append(out, LocalHook{Event: event, Index: i + 1, Raw: raw})
+		}
+	}
+	return out, nil
+}
+
+// AdoptHook marks the entry at the given position of an event as the hook
+// with the given id, by putting the marker behind its command. It returns
+// the hash the state file records for the entry. From then on a sync sees
+// the entry as the one it would write, instead of adding a second.
+func AdoptHook(file, event string, index int, id string) (string, error) {
+	hf, err := readHookFile(file)
+	if err != nil {
+		return "", err
+	}
+	list := hf.entries[event]
+	if index < 1 || index > len(list) {
+		return "", fmt.Errorf("%s has no entry %d for %s", file, index, event)
+	}
+	var entry map[string]any
+	if err := json.Unmarshal(list[index-1], &entry); err != nil {
+		return "", err
+	}
+	mark := func(m map[string]any) bool {
+		for _, key := range []string{"command", "bash"} {
+			if c, ok := m[key].(string); ok {
+				m[key] = c + target.HookMarker + id
+				return true
+			}
+		}
+		return false
+	}
+	marked := mark(entry)
+	if inner, ok := entry["hooks"].([]any); ok && !marked && len(inner) > 0 {
+		if first, ok := inner[0].(map[string]any); ok {
+			marked = mark(first)
+		}
+	}
+	if !marked {
+		return "", fmt.Errorf("the entry has no command")
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return "", err
+	}
+	list[index-1] = raw
+	if err := hf.write(target.HookPlace{File: file}); err != nil {
+		return "", err
+	}
+	return hashBytes(raw), nil
 }

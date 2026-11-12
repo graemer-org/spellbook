@@ -485,3 +485,137 @@ func TestPushMCPServerRefusesSecretsAndSaysHowToFixThem(t *testing.T) {
 		t.Error("after the merge the other tool should get the servers too")
 	}
 }
+
+func TestPushHookAdoptsTheLocalEntry(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	settings := filepath.Join(project, ".claude", "settings.json")
+	write(t, settings, `{
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "API_TOKEN=abc123 ./check.sh", "timeout": 10}]},
+      {"matcher": "Bash", "hooks": [{"type": "command", "command": "grep -q 'push --force' && exit 2 || exit 0", "timeout": 10}]}
+    ]
+  }
+}
+`)
+	if out := e.mustRun("push", "-p"); !strings.Contains(out, "PreToolUse:1") || !strings.Contains(out, "PreToolUse:2") {
+		t.Errorf("push should list the local hooks:\n%s", out)
+	}
+	if code, out := e.run("push", "hook", "PreToolUse:2", "-p", "--yes"); code == 0 || !strings.Contains(out, "--name") {
+		t.Errorf("a hook needs a name: exit %d\n%s", code, out)
+	}
+	if code, out := e.run("push", "hook", "PreToolUse:1", "-p", "--yes", "--name", "check"); code == 0 || !strings.Contains(out, "API_TOKEN is set to a value") {
+		t.Errorf("a secret in the command must be refused with the fix: exit %d\n%s", code, out)
+	}
+
+	out := e.mustRun("push", "hook", "PreToolUse:2", "-p", "--yes", "--name", "no-force-push")
+	got := show(t, repo, "spellbook/add-no-force-push", "hooks/no-force-push.json")
+	for _, want := range []string{`"event": "PreToolUse"`, `"matcher": "Bash"`, `"timeout": 10`, "push --force"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the registry hook misses %s:\n%s", want, got)
+		}
+	}
+	if !strings.Contains(out, "registry allow") {
+		t.Errorf("the user should be reminded that hooks need permission:\n%s", out)
+	}
+	local := read(t, settings)
+	if strings.Count(local, "# spellbook:acme/no-force-push") != 1 || !strings.Contains(local, `"model": "opus"`) || !strings.Contains(local, "API_TOKEN=abc123") {
+		t.Errorf("the local entry should carry the marker, and nothing else should change:\n%s", local)
+	}
+
+	// Before the merge the entry stays; after it, there is still one.
+	e.mustRun("sync", "-p")
+	if !strings.Contains(read(t, settings), "acme/no-force-push") {
+		t.Fatal("a sync removed the pushed hook")
+	}
+	e.git(repo, "merge", "--quiet", "spellbook/add-no-force-push")
+	e.mustRun("registry", "allow", "acme", "hooks", "-p")
+	if got := read(t, settings); strings.Count(got, "push --force") != 1 {
+		t.Errorf("after the merge the hook must be there once, not twice:\n%s", got)
+	}
+}
+
+func TestPushWholeInstructionFile(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	write(t, filepath.Join(project, "CLAUDE.md"), "# Project notes\n\nAlways run the tests.\n")
+	if code, out := e.run("push", "CLAUDE.md", "-p", "--yes"); code == 0 || !strings.Contains(out, "--name") {
+		t.Errorf("a whole file needs a name: exit %d\n%s", code, out)
+	}
+	out := e.mustRun("push", "CLAUDE.md", "-p", "--yes", "--name", "project-notes")
+	if got := show(t, repo, "spellbook/add-project-notes", "instructions/project-notes.md"); got != "# Project notes\n\nAlways run the tests.\n" {
+		t.Errorf("the instruction should be the file's text: %q", got)
+	}
+	if !strings.Contains(out, "remove the text from CLAUDE.md") || strings.Contains(out, "Your local copy stays") {
+		t.Errorf("the user should be told to remove the text later:\n%s", out)
+	}
+	if read(t, filepath.Join(project, "CLAUDE.md")) != "# Project notes\n\nAlways run the tests.\n" {
+		t.Error("the file must not be changed")
+	}
+}
+
+func TestPushChangeInsideACopilotBlock(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	write(t, filepath.Join(repo, "instructions", "standards.md"), "---\ndescription: Company standards\n---\nUse tabs.\n")
+	e.commit(repo, "instruction")
+	e.mustRun("sync", "-p")
+	shared := filepath.Join(project, ".github", "copilot-instructions.md")
+	write(t, shared, strings.Replace(read(t, shared), "Use tabs.", "Use spaces.", 1))
+
+	e.mustRun("push", "instruction", "standards", "-p", "--yes", "--from", "copilot")
+	got := show(t, repo, "spellbook/update-standards", "instructions/standards.md")
+	if !strings.Contains(got, "Use spaces.") || !strings.Contains(got, "description: Company standards") {
+		t.Errorf("the change from the block should reach the registry, with the description kept:\n%s", got)
+	}
+	out := e.mustRun("sync", "-p")
+	if !strings.Contains(read(t, shared), "Use spaces.") || strings.Contains(out, "edited locally") {
+		t.Errorf("the pushed change in the block must be kept quietly:\n%s", out)
+	}
+	e.git(repo, "merge", "--quiet", "spellbook/update-standards")
+	out = e.mustRun("sync", "-p")
+	if strings.Contains(out, "warning") || !strings.Contains(read(t, filepath.Join(project, ".claude", "rules", "standards.md")), "Use spaces.") {
+		t.Errorf("after the merge the other tool should get the change:\n%s", out)
+	}
+}
+
+func TestPushMCPServerFromCodex(t *testing.T) {
+	e := newEnv(t)
+	for k, v := range map[string]string{"GIT_AUTHOR_NAME": "test", "GIT_AUTHOR_EMAIL": "test@example.com", "GIT_COMMITTER_NAME": "test", "GIT_COMMITTER_EMAIL": "test@example.com"} {
+		t.Setenv(k, v)
+	}
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project", "--target", "codex")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+	config := filepath.Join(project, ".codex", "config.toml")
+	write(t, config, "model = \"gpt-5\"\n\n[mcp_servers.docs]\nurl = \"https://mcp.example.com/mcp\"\nbearer_token_env_var = \"DOCS_TOKEN\"\n\n[mcp_servers.tracker]\ncommand = \"npx\"\nargs = [\"-y\", \"@acme/tracker\"]\nenv_vars = [\"TRACKER_TOKEN\"]\n")
+
+	e.mustRun("push", "mcp", "docs", "mcp", "tracker", "-p", "--yes", "--branch", "b")
+	docs := show(t, repo, "b", "mcp/docs.json")
+	if !strings.Contains(docs, `"Authorization": "Bearer ${DOCS_TOKEN}"`) || !strings.Contains(docs, `"type": "http"`) {
+		t.Errorf("Codex's bearer token setting should become a header for every tool:\n%s", docs)
+	}
+	if got := show(t, repo, "b", "mcp/tracker.json"); !strings.Contains(got, `"TRACKER_TOKEN": "${TRACKER_TOKEN}"`) {
+		t.Errorf("Codex's env_vars should become env references:\n%s", got)
+	}
+	e.mustRun("sync", "-p")
+	if got := read(t, config); !strings.Contains(got, "[mcp_servers.docs]") || !strings.Contains(got, `model = "gpt-5"`) {
+		t.Errorf("a sync changed the pushed servers or the rest of the file:\n%s", got)
+	}
+}
+
+func TestPushCanOpenThePullRequest(t *testing.T) {
+	e, _, project := pushEnv(t, "")
+	write(t, filepath.Join(project, ".claude", "skills", "notes", "SKILL.md"), "---\nname: notes\ndescription: Take notes\n---\nv1\n")
+	// The test registry is a local path, which gh cannot serve.
+	if code, out := e.run("push", "skill", "notes", "-p", "--yes", "--pr"); code == 0 || !strings.Contains(out, "not on GitHub") {
+		t.Errorf("--pr for a registry that is not on GitHub should be refused before anything is pushed: exit %d\n%s", code, out)
+	}
+	if got, ok := push.GitHubRepo("git@github.com:acme/ai-registry.git"); !ok || got != "acme/ai-registry" {
+		t.Errorf("GitHubRepo = %q, %v", got, ok)
+	}
+	if got, ok := push.GitHubRepo("https://github.example.com/acme/reg"); !ok || got != "github.example.com/acme/reg" {
+		t.Errorf("GitHubRepo for an enterprise host = %q, %v", got, ok)
+	}
+}

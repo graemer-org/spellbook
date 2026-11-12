@@ -1194,7 +1194,8 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 func newPush(locate func() (config.Location, error)) *cobra.Command {
 	var to, from, group, branch, message, into string
 	var plain []string
-	var dryRun, yes bool
+	var name string
+	var dryRun, yes, pr bool
 	cmd := &cobra.Command{
 		Use:   "push [<path> | <kind> <name>]...",
 		Short: "Propose something you created locally to a registry",
@@ -1202,8 +1203,10 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 			"changed where one of your tools reads it, turn it into the form a registry\n" +
 			"holds, and push it to the registry on a new branch. You get the link to open\n" +
 			"a pull request.\n\n" +
-			"Name what to push by its path, or by its kind and name (an MCP server always\n" +
-			"as 'mcp <name>'). Without arguments, push lists what it finds.\n\n" +
+			"Name what to push by its path, or by its kind and name. An MCP server is\n" +
+			"always 'mcp <name>', and a hook 'hook <Event>:<number>' as push lists it,\n" +
+			"together with --name. A file such as CLAUDE.md can be pushed as a whole,\n" +
+			"also with --name. Without arguments, push lists what it finds.\n\n" +
 			"An MCP server whose definition holds a secret written out is refused; push\n" +
 			"says which value it is and how to refer to an environment variable instead.",
 		Example: "  spellbook push                                   # what could be pushed\n" +
@@ -1255,7 +1258,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 				if err := w.Flush(); err != nil {
 					return err
 				}
-				fmt.Fprintln(out, "Push one with: spellbook push <path> --to <registry>")
+				fmt.Fprintln(out, "Push one with: spellbook push <path> --to <registry>, or spellbook push <kind> <name> --to <registry>")
 				return nil
 			}
 
@@ -1272,9 +1275,29 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 			if from != "" && !target.Known(from) {
 				return fmt.Errorf("unknown tool %q for --from (supported: %s)", from, strings.Join(target.Names(), ", "))
 			}
-			items, err := push.Select(all, args, from, plain)
+			items, err := push.Select(all, args, push.Options{From: from, Plain: plain, Name: name})
 			if err != nil {
 				return err
+			}
+			if name != "" && len(items) != 1 {
+				return fmt.Errorf("--name names one thing; push the others in a call of their own")
+			}
+			ghBin := os.Getenv("SPELLBOOK_GH_BIN")
+			if ghBin == "" {
+				ghBin = "gh"
+			}
+			ghRepo := ""
+			if pr {
+				var isGitHub bool
+				if ghRepo, isGitHub = push.GitHubRepo(reg.URL); !isGitHub {
+					return fmt.Errorf("--pr opens a pull request with GitHub's gh command, and registry %s is not on GitHub; push without --pr and open it from the branch", reg.Name)
+				}
+				if _, err := exec.LookPath(ghBin); err != nil {
+					return fmt.Errorf("--pr needs GitHub's gh command, which was not found; push without --pr to get the link instead")
+				}
+				if into != "" {
+					return fmt.Errorf("--pr and --into do not go together")
+				}
 			}
 
 			// Look at everything the registry holds, whatever this
@@ -1387,19 +1410,42 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 					return err
 				}
 				fmt.Fprintf(out, "Pushed the branch %s to %s.\n", branch, reg.Name)
-				if link := push.PullRequestURL(reg.URL, branch); link != "" {
+				link := push.PullRequestURL(reg.URL, branch)
+				opened := false
+				if pr {
+					body := "Proposed with `spellbook push`.\n"
+					for _, it := range items {
+						body += fmt.Sprintf("\n- %s `%s`", it.Kind, it.Name)
+					}
+					res, err := exec.CommandContext(cmd.Context(), ghBin, "pr", "create", "--repo", ghRepo, "--head", branch, "--title", message, "--body", body).CombinedOutput()
+					if err != nil {
+						fmt.Fprintf(cmd.ErrOrStderr(), "warning: the branch is pushed, but gh could not open the pull request: %s\n", strings.TrimSpace(string(res)))
+					} else {
+						opened = true
+						fmt.Fprintf(out, "Opened a pull request:\n  %s\n", strings.TrimSpace(string(res)))
+					}
+				}
+				if !opened && link != "" {
 					fmt.Fprintf(out, "Open a pull request:\n  %s\n", link)
 				}
 			}
 
 			var pending []syncer.PendingItem
 			for _, it := range items {
-				pending = append(pending, it.PendingItem(loc, reg.Name))
+				p, record, err := it.Pending(loc, reg.Name)
+				if err != nil {
+					return err
+				}
+				if record {
+					pending = append(pending, p)
+				}
 			}
 			if err := syncer.MarkPending(loc, pending); err != nil {
 				return err
 			}
-			fmt.Fprintln(out, "Your local copy stays. Once the registry has it, 'spellbook sync' replaces it with the registry's version.")
+			if len(pending) > 0 {
+				fmt.Fprintln(out, "Your local copy stays. Once the registry has it, 'spellbook sync' replaces it with the registry's version.")
+			}
 			return nil
 		},
 	}
@@ -1411,7 +1457,9 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 	cmd.Flags().StringVar(&into, "into", "", "write into this local clone of the registry instead of pushing a branch")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "show what would be sent without sending it")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask before pushing")
-	cmd.Flags().StringSliceVar(&plain, "plain", nil, "for an MCP server: a key in env or headers whose value is no secret; repeatable")
+	cmd.Flags().StringSliceVar(&plain, "plain", nil, "for an MCP server or hook: a key or flag whose value is no secret; repeatable")
+	cmd.Flags().StringVar(&name, "name", "", "the name in the registry, for a hook or a whole instruction file such as CLAUDE.md")
+	cmd.Flags().BoolVar(&pr, "pr", false, "also open the pull request, with GitHub's gh command")
 	return cmd
 }
 

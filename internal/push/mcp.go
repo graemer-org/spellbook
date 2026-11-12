@@ -27,8 +27,19 @@ const KindMCP = "mcp"
 func mcpCandidates(loc config.Location, cfg *config.Config, recorded map[string]state.Entry, add func(Candidate)) {
 	for _, tool := range cfg.EnabledTargets() {
 		place, err := target.MCPFor(tool, loc)
-		if err != nil || place.TOML {
-			// Codex keeps its servers in TOML, which is not read yet.
+		if err != nil {
+			continue
+		}
+		if place.TOML {
+			// Codex keeps its servers in TOML, in a form of its own. Only
+			// the ones Spellbook did not install are offered.
+			_, hashes, _ := syncer.TOMLServers(place.File)
+			for name, raw := range codexServers(place.File) {
+				if _, managed := recorded[syncer.StateKey(loc, place.File)+"#"+name]; managed {
+					continue
+				}
+				add(Candidate{Kind: KindMCP, Name: name, Target: tool, Path: place.File + "#" + name, entry: raw, StateKind: syncer.KindMCPTOML, tomlHash: hashes[name]})
+			}
 			continue
 		}
 		data, err := os.ReadFile(place.File)

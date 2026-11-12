@@ -120,6 +120,10 @@ func (r *run) applyMCPTOML(want map[target.MCPPlace][]mcpWant) error {
 				r.entries = append(r.entries, e)
 			case !exists:
 				// Already gone.
+			case e.Pending:
+				// Pushed to the registry, which does not offer it yet, or
+				// may not install it here.
+				r.entries = append(r.entries, e)
 			case onDisk != e.Hash && !r.opts.Force:
 				r.counts(e.Target).Skipped++
 				r.warnf("%s: kept MCP server %q: it was edited in %s (use --force to remove)", e.Target, e.Name, abs)
@@ -142,4 +146,23 @@ func (r *run) applyMCPTOML(want map[target.MCPPlace][]mcpWant) error {
 		}
 	}
 	return nil
+}
+
+// TOMLServers returns the MCP servers in a TOML configuration file as the
+// tables the tool reads, and the hash the state file records for each.
+func TOMLServers(file string) (map[string]map[string]any, map[string]string, error) {
+	f, err := readTOML(file)
+	if err != nil {
+		return nil, nil, err
+	}
+	all, _ := f.table(tomlServers)
+	servers := map[string]map[string]any{}
+	hashes := map[string]string{}
+	for name, v := range all {
+		if table, ok := v.(map[string]any); ok {
+			servers[name] = table
+			hashes[name], _ = f.hash(tomlServers, name)
+		}
+	}
+	return servers, hashes, nil
 }

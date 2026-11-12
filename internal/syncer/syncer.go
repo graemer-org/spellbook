@@ -706,9 +706,16 @@ func (r *run) applyBlocks(want map[string][]block) error {
 				c.Installed++
 			case hashBytes([]byte(body)) == hash:
 				c.Unchanged++
+			case managed && prev.Pending && prev.Base == hash && !r.opts.Force:
+				// A pushed local change, while the registry still offers
+				// the version it was made from.
+				c.Unchanged++
+				out = append(out, blocks.Block{ID: b.id, Body: body})
+				r.entries = append(r.entries, prev)
+				continue
 			case managed && hashBytes([]byte(body)) != prev.Hash && !r.opts.Force:
 				c.Skipped++
-				r.warnf("%s: skipped instruction %q: its block in %s was edited locally (use --force to overwrite)", b.target, b.name, abs)
+				r.warnf("%s: skipped instruction %q: its block in %s was edited locally (use --force to overwrite, or 'spellbook push' to propose your change)", b.target, b.name, abs)
 				out = append(out, blocks.Block{ID: b.id, Body: body})
 				r.entries = append(r.entries, prev)
 				continue
