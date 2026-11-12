@@ -27,7 +27,8 @@ go vet ./... && gofmt -l .    # must be clean before committing
 | `internal/registry` | fetch a registry, discover resources, read `registry.toml`, resolve groups |
 | `internal/lock` | `spellbook.lock`, the commit each registry was synced at |
 | `internal/gitx` | shell out to git |
-| `internal/syncer` | resolve what should be installed and apply it |
+| `internal/syncer` | resolve what should be installed and apply it; compare and verify |
+| `internal/autosync` | throttle for the automatic sync, session hooks for both tools |
 | `internal/state` | record of what Spellbook wrote |
 | `internal/fsutil` | hash and copy directories |
 
@@ -61,6 +62,12 @@ go vet ./... && gofmt -l .    # must be clean before committing
   are interpreted, and `name` is set to the installed name.
 - **Syncing twice changes nothing.** The second run must report everything
   as unchanged and must not rewrite any file.
+- **`sync --auto` is silent and never fails.** A tool may feed a session
+  hook's output to the model, and a broken sync must not block a session.
+  The outcome goes to the status file that `autosync status` reads.
+- **A user's settings file keeps its content and key order.** Only the
+  SessionStart entries that run Spellbook are added or removed, and a file
+  that is not valid JSON is not touched.
 - **`diff` changes nothing.** It never writes to targets, state or lock.
 
 ## Scopes
@@ -83,7 +90,7 @@ in a temporary home. Add a test there for every user-visible behaviour.
 3. Instructions: rule files for Claude Code, managed blocks in
    `copilot-instructions.md`, layering, path-scoped instruction files (done)
 4. Agents and prompts, with frontmatter translation per target (done)
-5. Automatic sync, `sync --check` for CI, `doctor`
+5. Automatic sync, `sync --check` for CI, `doctor` (done)
 6. MCP servers and hooks, allowed per registry
 7. Installation with Homebrew through a tap
 

@@ -944,3 +944,185 @@ func TestGroupsSelectAgentsAndPrompts(t *testing.T) {
 		t.Error("skills and prompts outside the joined group were installed")
 	}
 }
+
+func TestCheckFailsWhenTheProjectDiffersFromTheLock(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+	if out := e.mustRun("sync", "-p", "--check"); !strings.Contains(out, "Up to date") {
+		t.Errorf("check right after a sync should pass:\n%s", out)
+	}
+
+	// Upstream moving on is not drift: the lock still describes the files.
+	e.writeSkills(repo, map[string]string{"alpha": "v2"})
+	e.commit(repo, "v2")
+	e.mustRun("sync", "-p", "--check")
+
+	skill := filepath.Join(project, ".claude", "skills", "alpha", "SKILL.md")
+	original := read(t, skill)
+	write(t, skill, "edited by hand")
+	code, out := e.run("sync", "-p", "--check")
+	if code == 0 || !strings.Contains(out, "differ from spellbook.lock") {
+		t.Errorf("check should fail for an edited file: exit %d\n%s", code, out)
+	}
+	if read(t, skill) != "edited by hand" {
+		t.Error("check changed a file")
+	}
+
+	write(t, skill, original)
+	if err := os.RemoveAll(filepath.Join(project, ".claude", "skills", "alpha")); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := e.run("sync", "-p", "--check"); code == 0 {
+		t.Error("check should fail for a missing skill")
+	}
+	if exists(filepath.Join(project, ".claude", "skills", "alpha")) {
+		t.Error("check installed a skill")
+	}
+}
+
+func TestAutoSyncIsSilentThrottledAndNeverFails(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--no-sync")
+	skill := filepath.Join(e.home, ".claude", "skills", "alpha", "SKILL.md")
+
+	if out := e.mustRun("sync", "--auto"); out != "" {
+		t.Errorf("automatic sync must print nothing, got:\n%s", out)
+	}
+	if !exists(skill) {
+		t.Fatal("the first automatic sync did not install the skill")
+	}
+
+	// Within the interval nothing happens, even though upstream changed.
+	e.writeSkills(repo, map[string]string{"alpha": "v2"})
+	e.commit(repo, "v2")
+	e.mustRun("sync", "--auto")
+	if got := read(t, skill); !strings.Contains(got, "v1") {
+		t.Errorf("a second automatic sync within the interval should do nothing: %q", got)
+	}
+	if out := e.mustRun("autosync", "status"); !strings.Contains(out, ", ok") || !strings.Contains(out, "interval 24h") {
+		t.Errorf("status does not show the successful run:\n%s", out)
+	}
+
+	// Without a configuration it still must not fail or print.
+	t.Setenv("SPELLBOOK_CONFIG_DIR", t.TempDir())
+	if code, out := e.run("sync", "--auto"); code != 0 || out != "" {
+		t.Errorf("automatic sync without configuration: exit %d, output %q", code, out)
+	}
+}
+
+func TestAutoSyncRecordsAFailureWithoutFailing(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	if err := os.RemoveAll(repo); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := e.run("sync", "--auto"); code != 0 || out != "" {
+		t.Errorf("a failing automatic sync must stay silent and exit 0: exit %d, output %q", code, out)
+	}
+	if out := e.mustRun("autosync", "status"); !strings.Contains(out, "failed: registry acme") {
+		t.Errorf("status does not show the failure:\n%s", out)
+	}
+	if !exists(filepath.Join(e.home, ".claude", "skills", "alpha")) {
+		t.Error("a failed automatic sync removed a skill")
+	}
+}
+
+func TestAutosyncEnableKeepsOtherSettingsAndDisableRemovesOnlyItsHook(t *testing.T) {
+	e := newEnv(t)
+	e.mustRun("init")
+	settings := filepath.Join(e.home, ".claude", "settings.json")
+	write(t, settings, `{
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "echo mine"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "echo bye"}]}]
+  },
+  "permissions": {"allow": ["Bash(ls:*)"]}
+}
+`)
+	e.mustRun("autosync", "enable")
+	e.mustRun("autosync", "enable") // twice must not add a second hook
+
+	got := read(t, settings)
+	if strings.Count(got, "spellbook sync --auto") != 1 {
+		t.Errorf("expected exactly one spellbook hook:\n%s", got)
+	}
+	for _, want := range []string{`"model": "opus"`, "echo mine", "echo bye", "Bash(ls:*)", `"async": true`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("settings lost %q:\n%s", want, got)
+		}
+	}
+	if m, h, p := strings.Index(got, `"model"`), strings.Index(got, `"hooks"`), strings.Index(got, `"permissions"`); !(m < h && h < p) {
+		t.Errorf("the order of the settings changed:\n%s", got)
+	}
+	copilotHook := filepath.Join(e.home, ".copilot", "hooks", "spellbook.json")
+	if got := read(t, copilotHook); !strings.Contains(got, `"sessionStart"`) || !strings.Contains(got, "spellbook sync --auto") {
+		t.Errorf("Copilot hook file is wrong:\n%s", got)
+	}
+	if out := e.mustRun("autosync", "status"); strings.Count(out, "hook installed") != 2 {
+		t.Errorf("status should show both hooks:\n%s", out)
+	}
+
+	e.mustRun("autosync", "disable")
+	got = read(t, settings)
+	if strings.Contains(got, "spellbook") {
+		t.Errorf("disable left the hook behind:\n%s", got)
+	}
+	for _, want := range []string{"echo mine", "echo bye", `"model": "opus"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("disable removed %q:\n%s", want, got)
+		}
+	}
+	if exists(copilotHook) {
+		t.Error("disable left the Copilot hook file behind")
+	}
+}
+
+func TestAutosyncEnableRefusesToTouchBrokenSettings(t *testing.T) {
+	e := newEnv(t)
+	e.mustRun("init", "--target", "claude")
+	settings := filepath.Join(e.home, ".claude", "settings.json")
+	write(t, settings, "{ not json")
+	if code, out := e.run("autosync", "enable"); code == 0 || !strings.Contains(out, "not valid JSON") {
+		t.Errorf("broken settings should be reported: exit %d\n%s", code, out)
+	}
+	if read(t, settings) != "{ not json" {
+		t.Error("broken settings file was modified")
+	}
+}
+
+func TestDoctorReportsEditedAndMissingResources(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1", "beta": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	out := e.mustRun("doctor")
+	if !strings.Contains(out, "2 installed resources match") || !strings.Contains(out, "registry acme is reachable") {
+		t.Errorf("doctor on a healthy setup:\n%s", out)
+	}
+
+	claude := filepath.Join(e.home, ".claude", "skills")
+	write(t, filepath.Join(claude, "alpha", "SKILL.md"), "edited")
+	if err := os.RemoveAll(filepath.Join(claude, "beta")); err != nil {
+		t.Fatal(err)
+	}
+	out = e.mustRun("doctor", "--offline")
+	if !strings.Contains(out, `"alpha"`) || !strings.Contains(out, "edited locally") || !strings.Contains(out, `"beta"`) || !strings.Contains(out, "is missing") {
+		t.Errorf("doctor does not report the edited and the missing skill:\n%s", out)
+	}
+
+	if err := os.RemoveAll(repo); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := e.run("doctor"); code == 0 || !strings.Contains(out, "cannot be reached") {
+		t.Errorf("doctor should fail for an unreachable registry: exit %d\n%s", code, out)
+	}
+}

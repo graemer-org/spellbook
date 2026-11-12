@@ -11,10 +11,14 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/graemer-org/spellbook/internal/autosync"
 	"github.com/graemer-org/spellbook/internal/config"
+	"github.com/graemer-org/spellbook/internal/gitx"
+	"github.com/graemer-org/spellbook/internal/lock"
 	"github.com/graemer-org/spellbook/internal/registry"
 	"github.com/graemer-org/spellbook/internal/state"
 	"github.com/graemer-org/spellbook/internal/syncer"
@@ -64,7 +68,7 @@ func newRoot() *cobra.Command {
 		return config.HomeLocation()
 	}
 
-	root.AddCommand(newInit(&project), newRegistry(locate), newGroup(locate), newSync(locate), newDiff(locate), newList(locate))
+	root.AddCommand(newInit(&project), newRegistry(locate), newGroup(locate), newSync(locate), newDiff(locate), newList(locate), newAutosync(locate), newDoctor(locate))
 	return root
 }
 
@@ -552,11 +556,16 @@ func newDiff(locate func() (config.Location, error)) *cobra.Command {
 
 func newSync(locate func() (config.Location, error)) *cobra.Command {
 	var opts syncer.Options
+	var auto, check bool
 	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Fetch all registries and update the targets",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if auto {
+				runAuto(cmd, locate)
+				return nil
+			}
 			loc, err := locate()
 			if err != nil {
 				return err
@@ -565,17 +574,25 @@ func newSync(locate func() (config.Location, error)) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if check {
+				return runCheck(cmd, loc, cfg)
+			}
 			return runSync(cmd, loc, cfg, opts)
 		},
 	}
+	cmd.Flags().BoolVar(&auto, "auto", false, "for session hooks: sync at most once per interval, print nothing and never fail")
+	cmd.Flags().BoolVar(&check, "check", false, "for CI: change nothing and fail if the installed files differ from spellbook.lock")
 	cmd.Flags().BoolVarP(&opts.DryRun, "dry-run", "n", false, "show what would change without writing anything")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite and remove resources that were edited locally")
 	cmd.Flags().BoolVar(&opts.Locked, "locked", false, "install the commits recorded in spellbook.lock instead of the newest ones")
+	cmd.MarkFlagsMutuallyExclusive("auto", "check", "dry-run")
+	cmd.MarkFlagsMutuallyExclusive("auto", "check", "locked")
+	cmd.MarkFlagsMutuallyExclusive("auto", "check", "force")
 	return cmd
 }
 
 func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts syncer.Options) error {
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
+	out := cmd.OutOrStdout()
 	if len(cfg.EnabledTargets()) == 0 {
 		return fmt.Errorf("no target is enabled in %s", loc.ConfigPath)
 	}
@@ -586,6 +603,69 @@ func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts s
 	if opts.DryRun {
 		fmt.Fprintln(out, "Dry run: nothing was written.")
 	}
+	printReport(cmd, rep)
+	if rep.Failed() {
+		return errSyncFailed
+	}
+	return nil
+}
+
+// runAuto is the sync a session hook starts. It stays silent, because a
+// tool may feed a hook's output to the model, and it never fails, because
+// a broken sync must not get in the way of a session. The outcome is kept
+// for 'spellbook autosync status'.
+func runAuto(cmd *cobra.Command, locate func() (config.Location, error)) {
+	loc, err := locate()
+	if err != nil {
+		return
+	}
+	cfg, err := config.Load(loc)
+	if err != nil {
+		return
+	}
+	interval, err := cfg.AutoSync.ParseInterval(autosync.DefaultInterval)
+	if err != nil {
+		return
+	}
+	status, err := autosync.Load(loc)
+	now := time.Now()
+	if err != nil || !status.Due(now, interval) {
+		return
+	}
+	rep, err := syncer.Run(cmd.Context(), loc, cfg, syncer.Options{})
+	if err == nil {
+		for _, r := range rep.Registries {
+			if r.Err != nil {
+				err = fmt.Errorf("registry %s: %w", r.Name, r.Err)
+				break
+			}
+		}
+	}
+	_ = autosync.Record(loc, now, err)
+}
+
+// runCheck reports whether a sync of the locked commits would change
+// anything, without changing it.
+func runCheck(cmd *cobra.Command, loc config.Location, cfg *config.Config) error {
+	rep, err := syncer.Run(cmd.Context(), loc, cfg, syncer.Options{DryRun: true, Locked: true})
+	if err != nil {
+		return err
+	}
+	drift := 0
+	for _, c := range rep.Targets {
+		drift += c.Installed + c.Updated + c.Removed + c.Skipped
+	}
+	if !rep.Failed() && drift == 0 {
+		fmt.Fprintf(cmd.OutOrStdout(), "Up to date with %s.\n", config.LockFile)
+		return nil
+	}
+	printReport(cmd, rep)
+	fmt.Fprintf(cmd.ErrOrStderr(), "error: the installed files differ from %s; run 'spellbook sync --locked' and commit the result\n", config.LockFile)
+	return errSyncFailed
+}
+
+func printReport(cmd *cobra.Command, rep *syncer.Report) {
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	for _, r := range rep.Registries {
 		if r.Err != nil {
 			fmt.Fprintf(errOut, "error: registry %s: %v\n", r.Name, r.Err)
@@ -610,10 +690,221 @@ func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts s
 	for _, w := range rep.Warnings {
 		fmt.Fprintln(errOut, "warning:", w)
 	}
-	if rep.Failed() {
-		return errSyncFailed
+}
+
+func newAutosync(locate func() (config.Location, error)) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "autosync",
+		Short: "Sync automatically when a session starts",
+		Long: "Install a session hook in Claude Code and GitHub Copilot that runs\n" +
+			"'spellbook sync --auto'. The sync runs at most once per interval, which is\n" +
+			"24h unless autosync.interval in the configuration says otherwise.",
 	}
-	return nil
+
+	// each runs fn for every enabled target.
+	each := func(cmd *cobra.Command, fn func(loc config.Location, cfg *config.Config, target string) error) error {
+		loc, err := locate()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(loc)
+		if err != nil {
+			return err
+		}
+		if len(cfg.EnabledTargets()) == 0 {
+			return fmt.Errorf("no target is enabled in %s", loc.ConfigPath)
+		}
+		for _, t := range cfg.EnabledTargets() {
+			if err := fn(loc, cfg, t); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	enable := &cobra.Command{
+		Use:   "enable",
+		Short: "Install the session hooks",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return each(cmd, func(loc config.Location, _ *config.Config, t string) error {
+				if err := autosync.Enable(t, loc); err != nil {
+					return err
+				}
+				file, _ := autosync.HookFile(t, loc)
+				fmt.Fprintf(cmd.OutOrStdout(), "%-8s hook installed in %s\n", t, file)
+				return nil
+			})
+		},
+	}
+
+	disable := &cobra.Command{
+		Use:   "disable",
+		Short: "Remove the session hooks",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return each(cmd, func(loc config.Location, _ *config.Config, t string) error {
+				if err := autosync.Disable(t, loc); err != nil {
+					return err
+				}
+				fmt.Fprintf(cmd.OutOrStdout(), "%-8s hook removed\n", t)
+				return nil
+			})
+		},
+	}
+
+	status := &cobra.Command{
+		Use:   "status",
+		Short: "Show the hooks and the last automatic sync",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			var loc config.Location
+			var cfg *config.Config
+			err := each(cmd, func(l config.Location, c *config.Config, t string) error {
+				loc, cfg = l, c
+				on, err := autosync.Installed(t, l)
+				if err != nil {
+					return err
+				}
+				state := "no hook"
+				if on {
+					state = "hook installed"
+				}
+				fmt.Fprintf(out, "%-8s %s\n", t, state)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			interval, err := cfg.AutoSync.ParseInterval(autosync.DefaultInterval)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "interval %s\n", interval)
+			st, err := autosync.Load(loc)
+			if err != nil {
+				return err
+			}
+			switch {
+			case st.LastAttempt.IsZero():
+				fmt.Fprintln(out, "last run never")
+			case st.LastError != "":
+				fmt.Fprintf(out, "last run %s, failed: %s\n", st.LastAttempt.Format(time.RFC3339), st.LastError)
+			default:
+				fmt.Fprintf(out, "last run %s, ok\n", st.LastSuccess.Format(time.RFC3339))
+			}
+			return nil
+		},
+	}
+
+	cmd.AddCommand(enable, disable, status)
+	return cmd
+}
+
+func newDoctor(locate func() (config.Location, error)) *cobra.Command {
+	var offline bool
+	cmd := &cobra.Command{
+		Use:   "doctor",
+		Short: "Check the setup and explain what is wrong",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			out := cmd.OutOrStdout()
+			failed := false
+			ok := func(format string, args ...any) { fmt.Fprintf(out, "ok    "+format+"\n", args...) }
+			warn := func(format string, args ...any) { fmt.Fprintf(out, "warn  "+format+"\n", args...) }
+			fail := func(format string, args ...any) {
+				failed = true
+				fmt.Fprintf(out, "FAIL  "+format+"\n", args...)
+			}
+			finish := func() error {
+				if failed {
+					return errSyncFailed
+				}
+				return nil
+			}
+
+			if v, err := gitx.Version(cmd.Context()); err != nil {
+				fail("git is not installed or not on PATH")
+			} else {
+				ok("git %s", v)
+			}
+
+			loc, err := locate()
+			if err != nil {
+				fail("%v", err)
+				return finish()
+			}
+			cfg, err := config.Load(loc)
+			if err != nil {
+				fail("%v", err)
+				return finish()
+			}
+			ok("configuration %s", loc.ConfigPath)
+
+			targets := cfg.EnabledTargets()
+			if len(targets) == 0 {
+				fail("no target is enabled")
+			}
+			for _, t := range targets {
+				dir, err := target.SkillsDir(t, cfg.Targets[t], loc)
+				if err != nil {
+					fail("%s: %v", t, err)
+					continue
+				}
+				ok("target %s, skills in %s", t, dir)
+				if on, err := autosync.Installed(t, loc); err == nil && !on {
+					warn("target %s has no automatic sync; run 'spellbook autosync enable'", t)
+				}
+			}
+
+			if len(cfg.Registries) == 0 {
+				warn("no registries; add one with 'spellbook registry add <name> <git-url>'")
+			}
+			lk, err := lock.Load(loc.LockPath)
+			if err != nil {
+				fail("%v", err)
+			}
+			for _, r := range cfg.Registries {
+				if lk != nil {
+					if _, synced := lk.Get(r.Name); !synced {
+						warn("registry %s was never synced; run 'spellbook sync'", r.Name)
+					}
+				}
+				if offline {
+					continue
+				}
+				if err := gitx.Reachable(cmd.Context(), r.URL); err != nil {
+					fail("registry %s cannot be reached: %v", r.Name, err)
+				} else {
+					ok("registry %s is reachable", r.Name)
+				}
+			}
+
+			total, problems, err := syncer.Verify(loc)
+			if err != nil {
+				fail("%v", err)
+				return finish()
+			}
+			if len(problems) == 0 {
+				ok("%d installed resources match what was synced", total)
+			}
+			for _, p := range problems {
+				what := "was edited locally; 'spellbook sync --force' restores it"
+				if p.Missing {
+					what = "is missing; 'spellbook sync' restores it"
+				}
+				warn("%s %q for %s (%s) %s", p.Entry.Kind, p.Entry.Name, p.Entry.Target, p.Entry.Path, what)
+			}
+
+			if st, err := autosync.Load(loc); err == nil && st.LastError != "" {
+				warn("the last automatic sync failed: %s", st.LastError)
+			}
+			return finish()
+		},
+	}
+	cmd.Flags().BoolVar(&offline, "offline", false, "do not contact the registries")
+	return cmd
 }
 
 func newList(locate func() (config.Location, error)) *cobra.Command {

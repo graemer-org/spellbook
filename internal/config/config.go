@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -95,7 +96,28 @@ const (
 // Config is the content of a config.toml or spellbook.toml file.
 type Config struct {
 	Targets    map[string]Target `toml:"targets,omitempty"`
+	AutoSync   AutoSync          `toml:"autosync,omitempty"`
 	Registries []Registry        `toml:"registry,omitempty"`
+}
+
+// AutoSync configures the sync that session hooks trigger.
+type AutoSync struct {
+	// Interval is the shortest time between two automatic syncs, written
+	// like "24h" or "90m". Empty means once a day.
+	Interval string `toml:"interval,omitempty"`
+}
+
+// ParseInterval returns the configured interval, or fallback when none is
+// set.
+func (a AutoSync) ParseInterval(fallback time.Duration) (time.Duration, error) {
+	if a.Interval == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(a.Interval)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("autosync.interval %q is not a duration such as \"24h\" or \"90m\"", a.Interval)
+	}
+	return d, nil
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -222,6 +244,9 @@ func Save(loc Location, cfg *Config) error {
 
 // Validate checks names and required fields.
 func (c *Config) Validate() error {
+	if _, err := c.AutoSync.ParseInterval(time.Hour); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, r := range c.Registries {
 		if !ValidName(r.Name) {

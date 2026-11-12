@@ -88,3 +88,15 @@ func Diff(ctx context.Context, dir, from, to, subpath string, stat bool) (string
 	}
 	return run(ctx, dir, args...)
 }
+
+// Version returns the version string of the installed git.
+func Version(ctx context.Context) (string, error) {
+	out, err := run(ctx, "", "--version")
+	return strings.TrimPrefix(out, "git version "), err
+}
+
+// Reachable checks that the repository at url can be read.
+func Reachable(ctx context.Context, url string) error {
+	_, err := run(ctx, "", "ls-remote", "--quiet", url, "HEAD")
+	return err
+}

@@ -7,8 +7,8 @@ A team keeps its skills, instructions, agents and prompts in one repository.
 Everyone subscribes once, and `spellbook sync` installs what is new, updates
 what changed and removes what was deleted, for both tools at the same time.
 
-> **Status:** early. Skills, instructions, agents, prompts, team groups and
-> the lock file work today. Automatic sync and MCP servers are planned; see
+> **Status:** early. Skills, instructions, agents, prompts, team groups,
+> the lock file and automatic sync work today. MCP servers are planned; see
 > the roadmap below.
 
 ## Install
@@ -27,7 +27,8 @@ spellbook registry add acme git@github.com:acme/ai-registry.git
 spellbook list
 ```
 
-After that, `spellbook sync` picks up whatever changed upstream.
+After that, `spellbook sync` picks up whatever changed upstream. To have
+that happen on its own, run `spellbook autosync enable`.
 
 ## Home and project
 
@@ -75,9 +76,12 @@ spellbook group list <registry>
 spellbook group join <registry> <group>...
 spellbook group leave <registry> <group>...
 
-spellbook sync [--dry-run] [--force] [--locked]
+spellbook sync [--dry-run] [--force] [--locked] [--check]
 spellbook diff [registry] [--patch]
 spellbook list
+
+spellbook autosync enable|disable|status
+spellbook doctor [--offline]
 ```
 
 Every command takes `--project` (`-p`) to work on the project instead of the
@@ -244,6 +248,47 @@ spellbook sync --locked     # install exactly what the lock records
 `sync --locked` is for teammates and CI: it reproduces the committed state
 and fails for a registry that is not in the lock file.
 
+## Automatic sync
+
+```sh
+spellbook autosync enable
+```
+
+This installs a session hook in each enabled tool that runs
+`spellbook sync --auto` when a session starts:
+
+- Claude Code: an entry in `~/.claude/settings.json`. Your other settings
+  and hooks stay as they are.
+- GitHub Copilot: the file `~/.copilot/hooks/spellbook.json`.
+
+The automatic sync runs at most once a day, in the background, prints
+nothing and never fails a session. `spellbook autosync status` shows when it
+last ran and whether it worked. Change the pace in the configuration:
+
+```toml
+[autosync]
+interval = "12h"
+```
+
+With `--project` the hooks go into the repository instead
+(`.claude/settings.json`, `.github/hooks/spellbook.json`), which then
+changes committed files whenever a teammate starts a session.
+
+## Checking a project in CI
+
+`spellbook sync --check` changes nothing and fails when the committed files
+differ from what `spellbook.lock` describes: a file was edited by hand, is
+missing, or someone changed `spellbook.toml` without syncing.
+
+```yaml
+- run: spellbook sync --project --check
+```
+
+## Troubleshooting
+
+`spellbook doctor` checks git, the configuration, whether each registry can
+be reached, and whether every installed file still matches what was synced.
+
 ## Configuration
 
 ```toml
@@ -285,7 +330,7 @@ Spellbook records everything it installs and only ever changes those paths.
 2. `registry.toml` manifest, team groups, prefixes for collisions, lockfile, `diff` — done
 3. Instructions, layered (company, team) and path-scoped — done
 4. Agents and prompts — done
-5. Automatic sync, `sync --check` for CI, `doctor`
+5. Automatic sync, `sync --check` for CI, `doctor` — done
 6. MCP servers and hooks
 7. Installation with Homebrew
 
