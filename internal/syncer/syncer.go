@@ -395,12 +395,12 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 				unsupported["hooks"]++
 				continue
 			}
-			if loc.Scope == config.ScopeProject && slices.ContainsFunc(target.ReadsProjectHooksOf(tname), func(other string) bool {
+			if slices.ContainsFunc(target.ReadsHooksOf(tname, loc), func(other string) bool {
 				return slices.Contains(enabled, other) && h.hook.For(other)
 			}) {
-				// In a project this tool also runs the hooks in another
-				// tool's file, where this hook is written already. A second
-				// entry would run it twice.
+				// This tool also runs the hooks in another tool's file,
+				// where this hook is written already. A second entry would
+				// run it twice.
 				continue
 			}
 			place, err := target.HookFor(tname, loc)

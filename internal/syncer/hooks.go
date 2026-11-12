@@ -116,7 +116,7 @@ func (hf *hookFile) write(place target.HookPlace) error {
 	if empty {
 		hf.file.Remove(hooksKey)
 	} else {
-		if place.Owned {
+		if place.Owned || place.Version {
 			if _, ok := hf.file.Get("version"); !ok {
 				fresh := &ojson.Object{}
 				fresh.Set("version", json.RawMessage("1"))
@@ -128,6 +128,10 @@ func (hf *hookFile) write(place target.HookPlace) error {
 			}
 		}
 		hf.file.Set(hooksKey, hf.hooks.Marshal())
+	}
+	if _, versioned := hf.file.Get("version"); empty && place.Version && versioned && hf.file.Len() == 1 {
+		// Only the version is left, and that says nothing on its own.
+		hf.file.Remove("version")
 	}
 	if (place.Owned && empty) || hf.file.Len() == 0 {
 		if err := os.Remove(place.File); err != nil && !os.IsNotExist(err) {
