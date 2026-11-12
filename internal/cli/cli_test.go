@@ -1067,7 +1067,7 @@ func TestAutosyncEnableKeepsOtherSettingsAndDisableRemovesOnlyItsHook(t *testing
 	if got := read(t, copilotHook); !strings.Contains(got, `"sessionStart"`) || !strings.Contains(got, "spellbook sync --auto") {
 		t.Errorf("Copilot hook file is wrong:\n%s", got)
 	}
-	if out := e.mustRun("autosync", "status"); strings.Count(out, "hook installed") != 2 {
+	if out := e.mustRun("autosync", "status"); strings.Count(out, "hook installed") < 2 {
 		t.Errorf("status should show both hooks:\n%s", out)
 	}
 

@@ -105,6 +105,9 @@ func (r *run) applyMCP(ctx context.Context, want map[target.MCPPlace][]mcpWant) 
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].File < ordered[j].File })
 
 	for _, place := range ordered {
+		if place.TOML {
+			continue
+		}
 		fileKey := pathKey(r.loc.Root, place.File)
 		kind := KindMCP
 		if place.ViaCLI {

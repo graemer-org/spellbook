@@ -34,6 +34,10 @@ func HookFile(target string, loc config.Location) (string, error) {
 			return filepath.Join(loc.Root, ".github", "hooks", "spellbook.json"), nil
 		}
 		return filepath.Join(loc.Root, ".copilot", "hooks", "spellbook.json"), nil
+	case "codex":
+		// Codex reads hooks.json next to its config.toml, in Claude Code's
+		// form.
+		return filepath.Join(loc.Root, ".codex", "hooks.json"), nil
 	}
 	return "", ErrUnsupported
 }

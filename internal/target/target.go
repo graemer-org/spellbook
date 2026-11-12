@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -47,6 +48,9 @@ type PromptPlace struct {
 type MCPPlace struct {
 	// File is the JSON file with the top-level "mcpServers" object.
 	File string
+	// TOML is true when File is a TOML file instead, with one
+	// [mcp_servers.<name>] table for each server.
+	TOML bool
 	// ViaCLI is true when the file belongs to the tool and must only be
 	// changed through the tool's own command line.
 	ViaCLI bool
@@ -82,6 +86,10 @@ type Spec struct {
 
 	// Agent returns the file an agent is written to.
 	Agent func(loc config.Location, name string) (string, bool)
+	// AgentFile returns the content of an agent file for a tool that does
+	// not read Markdown with frontmatter. own is the frontmatter section
+	// under the tool's name.
+	AgentFile func(registry, name, description string, own map[string]any, body string) ([]byte, error)
 
 	// Prompt returns where a prompt is written. skillsDir is the target's
 	// skills directory, for tools that run prompts as skills.
@@ -96,6 +104,8 @@ type Spec struct {
 	// tool's form. The command already carries the marker.
 	Hooks     func(loc config.Location) (HookPlace, bool)
 	HookEntry func(command, matcher string, timeout int) map[string]any
+	// HookEvents lists the events the tool fires. Empty means all of them.
+	HookEvents []string
 	// ReadsProjectHooksOf names tools whose project hooks file this tool
 	// reads as well. A hook written there is not written again for this
 	// tool, so it does not run twice.
@@ -293,6 +303,33 @@ func HookFor(name string, loc config.Location) (HookPlace, error) {
 		return HookPlace{}, ErrUnsupported
 	}
 	return place, nil
+}
+
+// HookFires reports whether the named tool fires the event.
+func HookFires(name, event string) bool {
+	events := specs[name].HookEvents
+	return len(events) == 0 || slices.Contains(events, event)
+}
+
+// RenderAgent returns the content of an agent file for one target. The
+// agent always carries the name it is installed under.
+func RenderAgent(name, registry, agent string, front *yaml.Node, body string) ([]byte, error) {
+	s, ok := specs[name]
+	if !ok || s.AgentFile == nil {
+		return RenderDoc(name, front, body, [][2]string{{"name", agent}})
+	}
+	fields := map[string]any{}
+	if front != nil {
+		if err := front.Decode(&fields); err != nil {
+			return nil, err
+		}
+	}
+	description, _ := fields["description"].(string)
+	own, ok := fields[name].(map[string]any)
+	if _, has := fields[name]; has && !ok {
+		return nil, fmt.Errorf("the frontmatter key %q must hold 'key: value' lines", name)
+	}
+	return s.AgentFile(registry, agent, description, own, body)
 }
 
 // HookMarker is put behind a hook's command as a shell comment. It is how
