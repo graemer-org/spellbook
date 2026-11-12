@@ -1,0 +1,4 @@
+/spellbook
+/dist/
+*.test
+*.out
