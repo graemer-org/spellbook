@@ -63,9 +63,16 @@ go vet ./... && gofmt -l .    # must be clean before committing
   are interpreted, and `name` is set to the installed name.
 - **Syncing twice changes nothing.** The second run must report everything
   as unchanged and must not rewrite any file.
-- **Guarded kinds need permission.** MCP servers run programs, so a registry
-  installs them only when its `allow` list names `mcp`. Anything added
-  later that executes code (hooks) must be guarded the same way.
+- **Guarded kinds need permission.** MCP servers and hooks run programs, so
+  a registry installs them only when its `allow` list names `mcp` or
+  `hooks`. Anything added later that executes code must be guarded the same
+  way.
+- **Hooks use Claude Code's event names for both tools.** Copilot accepts
+  them and then applies Claude Code's matcher rules and input format. A
+  hook entry is Spellbook's when its command ends in `# spellbook:<id>`.
+- **No hook runs twice.** In a project Copilot also reads
+  `.claude/settings.json`, so a hook written there for Claude Code is not
+  written to `.github/hooks/` as well.
 - **Never write `~/.claude.json`.** Claude Code rewrites that file itself.
   User-level MCP servers are changed through `claude mcp add-json` and
   `claude mcp remove`; the file is only read. The tool may store an entry
@@ -100,11 +107,9 @@ in a temporary home. Add a test there for every user-visible behaviour.
 4. Agents and prompts, with frontmatter translation per target (done)
 5. Automatic sync, `sync --check` for CI, `doctor` (done)
 6. MCP servers, allowed per registry (done)
-7. Installation with Homebrew through a tap (set up; this repository is
-   the tap, the first release creates the formula)
-8. Hooks from registries: Claude Code and Copilot use different schemas and
-   event names, and hooks execute code, so they need a translation layer
-   and the same permission as MCP servers
+7. Installation with Homebrew through a tap (done; this repository is the
+   tap)
+8. Hooks from registries (done)
 
 ## Workflow
 

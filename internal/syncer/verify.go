@@ -71,6 +71,23 @@ func Verify(loc config.Location) (int, []Problem, error) {
 			}
 			continue
 		}
+		if e.Kind == KindHook {
+			i := strings.LastIndex(e.Path, "#")
+			if i < 0 {
+				continue
+			}
+			hf, err := readHookFile(absPath(loc.Root, e.Path[:i]))
+			if err != nil {
+				problems = append(problems, Problem{Entry: e})
+				continue
+			}
+			if hash, ok := hf.hash(e.Path[i+1:]); !ok {
+				problems = append(problems, Problem{Entry: e, Missing: true})
+			} else if hash != e.Hash {
+				problems = append(problems, Problem{Entry: e})
+			}
+			continue
+		}
 		abs := absPath(loc.Root, e.Path)
 		if _, err := os.Lstat(abs); os.IsNotExist(err) {
 			problems = append(problems, Problem{Entry: e, Missing: true})

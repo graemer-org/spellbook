@@ -79,15 +79,16 @@ const (
 	KindAgents       = "agents"
 	KindPrompts      = "prompts"
 	KindMCP          = "mcp"
+	KindHooks        = "hooks"
 )
 
 // Kinds lists the valid values of Registry.Only.
-var Kinds = []string{KindSkills, KindInstructions, KindAgents, KindPrompts, KindMCP}
+var Kinds = []string{KindSkills, KindInstructions, KindAgents, KindPrompts, KindMCP, KindHooks}
 
 // GuardedKinds are the kinds that start programs or open connections on
 // the user's machine. A registry only provides them when Registry.Allow
 // names them.
-var GuardedKinds = []string{KindMCP}
+var GuardedKinds = []string{KindMCP, KindHooks}
 
 // Allows reports whether the subscriber allowed a guarded kind.
 func (r Registry) Allows(kind string) bool { return slices.Contains(r.Allow, kind) }

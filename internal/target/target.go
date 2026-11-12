@@ -307,3 +307,103 @@ func RenderMCP(name string, raw []byte) ([]byte, error) {
 	}
 	return json.Marshal(def)
 }
+
+// HookPlace says where a target keeps its hooks.
+type HookPlace struct {
+	// File is a JSON file whose top-level "hooks" object maps an event name
+	// to a list of entries.
+	File string
+	// Owned is true when the file belongs to Spellbook alone. Otherwise it
+	// is the tool's settings file and holds much more than hooks.
+	Owned bool
+}
+
+// HookFor returns where hooks of a target are stored.
+func HookFor(name string, loc config.Location) (HookPlace, error) {
+	switch name {
+	case "claude":
+		return HookPlace{File: filepath.Join(loc.Root, ".claude", "settings.json")}, nil
+	case "copilot":
+		base := filepath.Join(loc.Root, ".copilot")
+		if loc.Scope == config.ScopeProject {
+			base = filepath.Join(loc.Root, ".github")
+		}
+		return HookPlace{File: filepath.Join(base, "hooks", "spellbook-hooks.json"), Owned: true}, nil
+	}
+	return HookPlace{}, fmt.Errorf("unknown target %q (supported: %s)", name, strings.Join(Names(), ", "))
+}
+
+// HookMarker is put behind a hook's command as a shell comment. It is how
+// Spellbook finds its entries among the user's own.
+const HookMarker = " # spellbook:"
+
+// HookEntry returns the entry for one hook in the form the target reads,
+// as canonical JSON. Both forms use Claude Code's event names, which
+// Copilot accepts together with Claude Code's matcher rules.
+func HookEntry(name, id, command, matcher string, timeout int) ([]byte, error) {
+	command += HookMarker + id
+	var entry map[string]any
+	switch name {
+	case "claude":
+		hook := map[string]any{"type": "command", "command": command}
+		if timeout > 0 {
+			hook["timeout"] = timeout
+		}
+		entry = map[string]any{"hooks": []any{hook}}
+	case "copilot":
+		entry = map[string]any{"type": "command", "command": command}
+		if timeout > 0 {
+			entry["timeoutSec"] = timeout
+		}
+	default:
+		return nil, fmt.Errorf("unknown target %q", name)
+	}
+	if matcher != "" {
+		entry["matcher"] = matcher
+	}
+	return json.Marshal(entry)
+}
+
+// HookID returns the id in the marker of a hook entry of either form, or
+// "" when the entry is not one of Spellbook's.
+func HookID(entry []byte) string {
+	var e struct {
+		Command string `json:"command"`
+		Bash    string `json:"bash"`
+		Hooks   []struct {
+			Command string `json:"command"`
+		} `json:"hooks"`
+	}
+	if json.Unmarshal(entry, &e) != nil {
+		return ""
+	}
+	commands := []string{e.Command, e.Bash}
+	for _, h := range e.Hooks {
+		commands = append(commands, h.Command)
+	}
+	for _, c := range commands {
+		if i := strings.LastIndex(c, HookMarker); i >= 0 {
+			return strings.TrimSpace(c[i+len(HookMarker):])
+		}
+	}
+	return ""
+}
+
+// HookFilesDir returns where the scripts of a hook are kept. In a project
+// they live inside the repository so they can be committed.
+func HookFilesDir(loc config.Location, hook string) string {
+	if loc.Scope == config.ScopeProject {
+		return filepath.Join(loc.Root, ".spellbook", "hooks", hook)
+	}
+	return filepath.Join(filepath.Dir(loc.ConfigPath), "hooks", hook)
+}
+
+// HookFilesRef returns how a hook command refers to its scripts. In a
+// project the path is relative to the project root, which Claude Code
+// names in CLAUDE_PROJECT_DIR and Copilot uses as working directory.
+func HookFilesRef(loc config.Location, hook string) string {
+	if loc.Scope == config.ScopeProject {
+		return "${CLAUDE_PROJECT_DIR:-.}/.spellbook/hooks/" + hook
+	}
+	return HookFilesDir(loc, hook)
+}

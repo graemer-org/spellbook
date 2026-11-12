@@ -1290,3 +1290,156 @@ func TestClaudeUserLevelMCPIsSkippedWithoutTheClaudeCommand(t *testing.T) {
 		t.Error("~/.claude.json must never be written directly")
 	}
 }
+
+// hookRepo is a registry with a single-file hook, a hook that brings a
+// script, and hooks that must be rejected.
+func (e *env) hookRepo() string {
+	e.t.Helper()
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(e.t, filepath.Join(repo, "hooks", "no-force-push.json"), `{
+  "description": "Stop force pushes",
+  "event": "PreToolUse",
+  "matcher": "Bash",
+  "command": "grep -q 'push --force' && exit 2 || exit 0",
+  "timeout": 10
+}`)
+	write(e.t, filepath.Join(repo, "hooks", "format", "hook.json"), `{
+  "event": "PostToolUse",
+  "matcher": "Edit|Write",
+  "command": "\"${HOOK_DIR}/format.sh\""
+}`)
+	write(e.t, filepath.Join(repo, "hooks", "format", "format.sh"), "#!/bin/sh\necho v1\n")
+	if err := os.Chmod(filepath.Join(repo, "hooks", "format", "format.sh"), 0o755); err != nil {
+		e.t.Fatal(err)
+	}
+	write(e.t, filepath.Join(repo, "hooks", "bad-event.json"), `{"event": "OnTuesdays", "command": "true"}`)
+	write(e.t, filepath.Join(repo, "hooks", "typo.json"), `{"event": "Stop", "comand": "true"}`)
+	e.commit(repo, "hooks")
+	return repo
+}
+
+func TestHooksNeedPermissionAndReachBothTools(t *testing.T) {
+	e := newEnv(t)
+	repo := e.hookRepo()
+	settings := filepath.Join(e.home, ".claude", "settings.json")
+	write(t, settings, `{
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "echo mine"}]}]
+  }
+}
+`)
+	e.mustRun("init")
+	out := e.mustRun("registry", "add", "acme", repo)
+	if !strings.Contains(out, "2 hooks not allowed") || !strings.Contains(out, "spellbook registry allow acme hooks") {
+		t.Errorf("the user is not told about the held back hooks:\n%s", out)
+	}
+	for _, bad := range []string{"hooks/bad-event.json", "hooks/typo.json"} {
+		if !strings.Contains(out, "skipped "+bad) {
+			t.Errorf("%s should be rejected with a reason:\n%s", bad, out)
+		}
+	}
+	if strings.Contains(read(t, settings), "spellbook") {
+		t.Fatal("hooks were installed without permission")
+	}
+
+	e.mustRun("registry", "allow", "acme", "hooks")
+	claude := read(t, settings)
+	for _, want := range []string{`"model": "opus"`, "echo mine", `"PostToolUse"`, `"matcher": "Edit|Write"`, "# spellbook:acme/no-force-push", `"timeout": 10`} {
+		if !strings.Contains(claude, want) {
+			t.Errorf("Claude settings miss %s:\n%s", want, claude)
+		}
+	}
+	scripts := filepath.Join(e.home, ".config", "spellbook", "hooks", "format")
+	if !strings.Contains(claude, scripts+"/format.sh") {
+		t.Errorf("the command does not point at the installed script:\n%s", claude)
+	}
+	info, err := os.Stat(filepath.Join(scripts, "format.sh"))
+	if err != nil || info.Mode()&0o111 == 0 {
+		t.Errorf("the hook's script is missing or not executable: %v", err)
+	}
+
+	copilot := read(t, filepath.Join(e.home, ".copilot", "hooks", "spellbook-hooks.json"))
+	for _, want := range []string{`"version": 1`, `"PreToolUse"`, `"matcher": "Bash"`, `"timeoutSec": 10`, "# spellbook:acme/format"} {
+		if !strings.Contains(copilot, want) {
+			t.Errorf("Copilot hooks file misses %s:\n%s", want, copilot)
+		}
+	}
+
+	if out := e.mustRun("sync"); strings.Contains(out, " 1 updated") || !strings.Contains(out, "0 installed") {
+		t.Errorf("second sync is not a no-op:\n%s", out)
+	}
+	if read(t, settings) != claude {
+		t.Error("second sync rewrote the settings file")
+	}
+
+	e.mustRun("registry", "disallow", "acme", "hooks")
+	claude = read(t, settings)
+	if strings.Contains(claude, "spellbook") || !strings.Contains(claude, "echo mine") || !strings.Contains(claude, `"model": "opus"`) {
+		t.Errorf("taking the permission back should remove only spellbook's hooks:\n%s", claude)
+	}
+	if exists(filepath.Join(e.home, ".copilot", "hooks", "spellbook-hooks.json")) || exists(scripts) {
+		t.Error("the Copilot hooks file and the scripts should be gone")
+	}
+}
+
+func TestHookUpdatesAndLocalEdits(t *testing.T) {
+	e := newEnv(t)
+	repo := e.hookRepo()
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--allow", "hooks")
+	settings := filepath.Join(e.home, ".claude", "settings.json")
+
+	// Upstream moves the hook to another event.
+	write(t, filepath.Join(repo, "hooks", "no-force-push.json"), `{"event": "UserPromptSubmit", "command": "exit 0"}`)
+	e.commit(repo, "v2")
+	e.mustRun("sync")
+	got := read(t, settings)
+	if strings.Count(got, "# spellbook:acme/no-force-push") != 1 || !strings.Contains(got, `"UserPromptSubmit"`) || strings.Contains(got, `"PreToolUse"`) {
+		t.Errorf("the hook should have moved to the new event, once:\n%s", got)
+	}
+
+	// A hook the user edited stays until --force.
+	write(t, settings, strings.Replace(got, "exit 0 #", "exit 1 #", 1))
+	write(t, filepath.Join(repo, "hooks", "no-force-push.json"), `{"event": "UserPromptSubmit", "command": "exit 3"}`)
+	e.commit(repo, "v3")
+	out := e.mustRun("sync")
+	if !strings.Contains(read(t, settings), "exit 1 #") || !strings.Contains(out, "edited") {
+		t.Errorf("an edited hook was overwritten without --force:\n%s", out)
+	}
+	if out := e.mustRun("doctor", "--offline"); !strings.Contains(out, `hook "no-force-push"`) {
+		t.Errorf("doctor does not report the edited hook:\n%s", out)
+	}
+	e.mustRun("sync", "--force")
+	if !strings.Contains(read(t, settings), "exit 3 #") {
+		t.Error("--force did not update the hook")
+	}
+}
+
+func TestProjectHooksAreNotDuplicatedForCopilot(t *testing.T) {
+	e := newEnv(t)
+	repo := e.hookRepo()
+	write(t, filepath.Join(repo, "hooks", "copilot-only.json"), `{"event": "Stop", "command": "true", "tools": ["copilot"]}`)
+	e.commit(repo, "copilot only")
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project")
+	e.mustRun("registry", "add", "acme", repo, "-p", "--allow", "hooks")
+
+	claude := read(t, filepath.Join(project, ".claude", "settings.json"))
+	if !strings.Contains(claude, "acme/format") || strings.Contains(claude, "copilot-only") {
+		t.Errorf("Claude settings should hold the shared hooks only:\n%s", claude)
+	}
+	if !strings.Contains(claude, "${CLAUDE_PROJECT_DIR:-.}/.spellbook/hooks/format/format.sh") {
+		t.Errorf("a project hook must refer to its script relative to the project:\n%s", claude)
+	}
+	if !exists(filepath.Join(project, ".spellbook", "hooks", "format", "format.sh")) {
+		t.Error("the script should be inside the repository")
+	}
+	// Copilot reads Claude Code's project settings too, so its own file
+	// only gets what is not there already.
+	copilot := read(t, filepath.Join(project, ".github", "hooks", "spellbook-hooks.json"))
+	if !strings.Contains(copilot, "acme/copilot-only") || strings.Contains(copilot, "acme/format") || strings.Contains(copilot, "no-force-push") {
+		t.Errorf("Copilot's file should hold only the hook that is not in Claude's settings:\n%s", copilot)
+	}
+}

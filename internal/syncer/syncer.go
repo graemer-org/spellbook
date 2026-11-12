@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -41,6 +42,11 @@ const (
 	// KindMCPCLI is an MCP server in a file that belongs to a tool and is
 	// only changed through that tool's command line.
 	KindMCPCLI = "mcp-cli"
+	// KindHook is a hook entry in a JSON file that may hold other hooks
+	// and settings. Its state path is "<file>#<hook id>".
+	KindHook = "hook"
+	// KindHookFiles is the directory with the scripts of a hook.
+	KindHookFiles = "hook-files"
 )
 
 // FetchFunc fetches one registry. Tests replace it.
@@ -72,7 +78,10 @@ type RegistryReport struct {
 	MCP          int
 	// MCPBlocked counts MCP servers the registry offers but may not install.
 	MCPBlocked int
-	Err        error
+	Hooks      int
+	// HooksBlocked counts hooks the registry offers but may not install.
+	HooksBlocked int
+	Err          error
 }
 
 // Counts summarises the changes made to one target.
@@ -143,6 +152,8 @@ type resource struct {
 	doc registry.Doc
 	// MCP servers.
 	mcp registry.MCPServer
+	// Hooks.
+	hook registry.Hook
 }
 
 // run carries the state of one sync.
@@ -198,8 +209,8 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 	regs := append([]config.Registry(nil), cfg.Registries...)
 	sort.SliceStable(regs, func(i, j int) bool { return regs[i].Priority > regs[j].Priority })
 
-	var skills, instructions, agents, prompts, servers []resource
-	serverNames := map[string]string{}
+	var skills, instructions, agents, prompts, servers, hooks []resource
+	serverNames, hookNames := map[string]string{}, map[string]string{}
 	skillNames, instructionNames := map[string]string{}, map[string]string{}
 	agentNames, promptNames := map[string]string{}, map[string]string{}
 	for _, reg := range regs {
@@ -227,7 +238,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			fail(err)
 			continue
 		}
-		rr := RegistryReport{Name: reg.Name, Commit: snap.Commit, Skills: len(snap.Skills), Instructions: len(snap.Instructions), Agents: len(snap.Agents), Prompts: len(snap.Prompts), MCP: len(snap.MCP), MCPBlocked: snap.MCPBlocked}
+		rr := RegistryReport{Name: reg.Name, Commit: snap.Commit, Skills: len(snap.Skills), Instructions: len(snap.Instructions), Agents: len(snap.Agents), Prompts: len(snap.Prompts), MCP: len(snap.MCP), MCPBlocked: snap.MCPBlocked, Hooks: len(snap.Hooks), HooksBlocked: snap.HooksBlocked}
 		if hasPrev {
 			rr.Previous = prev.Commit
 		}
@@ -275,6 +286,11 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 				servers = append(servers, resource{name: name, registry: reg.Name, commit: snap.Commit, mcp: m})
 			}
 		}
+		for _, h := range snap.Hooks {
+			if name, ok := r.claim(hookNames, reg, "hook", h.Name); ok {
+				hooks = append(hooks, resource{name: name, registry: reg.Name, commit: snap.Commit, hook: h})
+			}
+		}
 		for _, doc := range snap.Prompts {
 			if name, ok := r.claim(promptNames, reg, "prompt", doc.Name); ok {
 				prompts = append(prompts, resource{name: name, registry: reg.Name, commit: snap.Commit, doc: doc})
@@ -286,6 +302,8 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 	want := map[string]item{}
 	wantBlocks := map[string][]block{}
 	wantMCP := map[target.MCPPlace][]mcpWant{}
+	wantHooks := map[target.HookPlace][]hookWant{}
+	enabled := cfg.EnabledTargets()
 	add := func(it item) {
 		key := pathKey(loc.Root, it.abs)
 		if _, dup := want[key]; !dup {
@@ -341,6 +359,37 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 				continue
 			}
 			wantMCP[place] = append(wantMCP[place], mcpWant{name: m.name, target: tname, registry: m.registry, commit: m.commit, entry: entry})
+		}
+		for _, h := range hooks {
+			if !h.hook.For(tname) {
+				continue
+			}
+			if tname == "copilot" && loc.Scope == config.ScopeProject && slices.Contains(enabled, "claude") && h.hook.For("claude") {
+				// In a project Copilot also runs the hooks in Claude Code's
+				// settings file. A second entry would run the hook twice.
+				continue
+			}
+			place, err := target.HookFor(tname, loc)
+			if err != nil {
+				return nil, err
+			}
+			command := h.hook.Command
+			if h.hook.Dir != "" {
+				// The scripts are installed once and shared by the tools.
+				dir := target.HookFilesDir(loc, h.name)
+				hash, err := fsutil.HashDir(h.hook.Dir)
+				if err != nil {
+					return nil, err
+				}
+				add(item{abs: dir, target: tname, kind: KindHookFiles, name: h.name, registry: h.registry, commit: h.commit, hash: hash, dir: h.hook.Dir})
+				command = strings.ReplaceAll(command, "${HOOK_DIR}", target.HookFilesRef(loc, h.name))
+			}
+			id := h.registry + "/" + h.name
+			entry, err := target.HookEntry(tname, id, command, h.hook.Matcher, h.hook.Timeout)
+			if err != nil {
+				return nil, err
+			}
+			wantHooks[place] = append(wantHooks[place], hookWant{id: id, name: h.name, target: tname, registry: h.registry, commit: h.commit, event: h.hook.Event, entry: entry})
 		}
 		unsupported := 0
 		for _, p := range prompts {
@@ -398,6 +447,9 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 		return nil, err
 	}
 	if err := r.applyMCP(ctx, wantMCP); err != nil {
+		return nil, err
+	}
+	if err := r.applyHooks(wantHooks); err != nil {
 		return nil, err
 	}
 
@@ -494,7 +546,7 @@ func (r *run) applyItems(want map[string]item) error {
 	}
 
 	for key, e := range r.old {
-		if e.Kind == KindBlock || e.Kind == KindMCP || e.Kind == KindMCPCLI {
+		if e.Kind == KindBlock || e.Kind == KindMCP || e.Kind == KindMCPCLI || e.Kind == KindHook {
 			continue
 		}
 		if _, keep := want[key]; keep {

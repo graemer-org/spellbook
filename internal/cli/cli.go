@@ -174,6 +174,9 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 			if snap.MCPBlocked > 0 {
 				fmt.Fprintf(out, "It also offers %d MCP servers. They start programs or connect to services, so they\nare only installed after: spellbook registry allow %s mcp\n", snap.MCPBlocked, reg.Name)
 			}
+			if snap.HooksBlocked > 0 {
+				fmt.Fprintf(out, "It also offers %d hooks. They run commands on your machine during a session, so\nthey are only installed after: spellbook registry allow %s hooks\n", snap.HooksBlocked, reg.Name)
+			}
 			if noSync {
 				return nil
 			}
@@ -185,8 +188,8 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	add.Flags().IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
 	add.Flags().StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
 	add.Flags().StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
-	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions, agents, prompts, mcp; repeatable")
-	add.Flags().StringSliceVar(&reg.Allow, "allow", nil, "let the registry install this guarded kind: mcp; repeatable")
+	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions, agents, prompts, mcp, hooks; repeatable")
+	add.Flags().StringSliceVar(&reg.Allow, "allow", nil, "let the registry install this guarded kind: mcp, hooks; repeatable")
 	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of installed names: 'all', or 'collisions' for taken names only")
 	add.Flags().BoolVar(&noSync, "no-sync", false, "add the registry without syncing")
 
@@ -318,9 +321,9 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	}
 	allow := &cobra.Command{
 		Use:   "allow <registry> <kind>...",
-		Short: "Let a registry install a guarded kind of resource (mcp) and sync",
-		Long: "MCP servers start programs or connect to services on your machine, so a\n" +
-			"registry only installs them after you allowed it to.",
+		Short: "Let a registry install a guarded kind of resource (mcp, hooks) and sync",
+		Long: "MCP servers and hooks run programs on your machine, so a registry only\n" +
+			"installs them after you allowed it to.",
 		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error { return permit(cmd, args, true) },
 	}
@@ -729,7 +732,11 @@ func printReport(cmd *cobra.Command, rep *syncer.Report) {
 		if r.MCPBlocked > 0 {
 			mcp = fmt.Sprintf("%d MCP servers not allowed", r.MCPBlocked)
 		}
-		fmt.Fprintf(out, "%-12s %d skills, %d instructions, %d agents, %d prompts, %s at %s%s\n", r.Name, r.Skills, r.Instructions, r.Agents, r.Prompts, mcp, short(r.Commit), was)
+		hooks := fmt.Sprintf("%d hooks", r.Hooks)
+		if r.HooksBlocked > 0 {
+			hooks = fmt.Sprintf("%d hooks not allowed", r.HooksBlocked)
+		}
+		fmt.Fprintf(out, "%-12s %d skills, %d instructions, %d agents, %d prompts, %s, %s at %s%s\n", r.Name, r.Skills, r.Instructions, r.Agents, r.Prompts, mcp, hooks, short(r.Commit), was)
 	}
 	names := make([]string, 0, len(rep.Targets))
 	for n := range rep.Targets {

@@ -102,6 +102,9 @@ func hashes(snap *registry.Snapshot) (map[string]string, error) {
 	for _, srv := range snap.MCP {
 		m[registry.MCPDir+"/"+srv.Name] = srv.Hash()
 	}
+	for _, h := range snap.Hooks {
+		m[registry.HooksDir+"/"+h.Name] = h.Hash()
+	}
 	for _, d := range snap.Prompts {
 		m[registry.PromptsDir+"/"+d.Name] = d.Hash()
 	}

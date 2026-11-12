@@ -56,7 +56,11 @@ type Snapshot struct {
 	AllMCP     []MCPServer
 	MCP        []MCPServer
 	MCPBlocked int
-	Warnings   []string
+	// Hooks follow the same rule as MCP servers.
+	AllHooks     []Hook
+	Hooks        []Hook
+	HooksBlocked int
+	Warnings     []string
 }
 
 // CacheRoot returns the directory registry checkouts are kept in.
@@ -200,6 +204,27 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			snap.MCP = selected
 		} else {
 			snap.MCPBlocked = len(selected)
+		}
+	}
+	if r.Wants(config.KindHooks) {
+		hooks, hwarn, err := DiscoverHooks(root, []string{"claude", "copilot"})
+		if err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, hwarn...)
+		snap.AllHooks = hooks
+		selected := hooks
+		if len(groups) > 0 {
+			names, err := manifest.Hooks(groups)
+			if err != nil {
+				return nil, err
+			}
+			selected, warnings = pick(hooks, names, func(h Hook) string { return h.Name }, warnings, "a group lists hook %q, which is not in the registry")
+		}
+		if r.Allows(config.KindHooks) {
+			snap.Hooks = selected
+		} else {
+			snap.HooksBlocked = len(selected)
 		}
 	}
 	snap.Warnings = warnings
