@@ -23,6 +23,9 @@ once, in a git repository. Everyone who subscribes gets it in the tools they
 use, and `spellbook sync` brings every later change: new things are
 installed, changed things updated, deleted things removed.
 
+It works in both directions. What you create or improve where you work goes
+back with `spellbook push`, as a branch and a pull request for the registry.
+
 ```sh
 brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
 brew install spellbook
@@ -197,6 +200,18 @@ because someone edited a synced file by hand.
 `spellbook sync --project --locked` reproduces exactly the locked state,
 which is what you want on a fresh checkout or after resolving a conflict.
 
+**5. Send back what grows here.** A skill that someone wrote in this
+repository, or an improvement to one that came from the registry, goes back
+with one command. It lands on a branch of the registry and you get the link
+for the pull request:
+
+```sh
+spellbook push --project                                  # what is new or changed here
+spellbook push .claude/skills/db-migration --project
+```
+
+[Pushing something back](#pushing-something-back) has the details.
+
 Home and project are independent. You can have your personal spells at home
 and a project's own set in the repository at the same time.
 
@@ -284,6 +299,15 @@ The registry is an ordinary repository, so the usual tools apply.
   Publishing one in the registry does not put it on anyone's machine.
 - **No secrets.** Refer to environment variables such as `${DOCS_TOKEN}`
   in MCP server definitions. Never commit a token to the registry.
+
+### Contributions from every team
+
+Nobody needs write access to the registry's main branch, or a clone of it,
+to contribute. `spellbook push` turns a skill, instruction, agent, prompt,
+MCP server or hook from where it is used into a branch of the registry, and
+the owners review the pull request. `--group platform` puts it into the
+team's group in the same change. Definitions with a secret written out are
+refused before anything leaves the machine.
 
 ### Projects
 

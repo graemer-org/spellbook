@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spellbook: shared spells for your AI coding agents</title>
-<meta name="description" content="Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in git. Spellbook installs them into Claude Code, GitHub Copilot, Cursor, Codex and Gemini CLI and keeps them up to date.">
+<meta name="description" content="Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in git. Spellbook installs them into Claude Code, GitHub Copilot, Cursor, Codex and Gemini CLI, keeps them up to date, and pushes what you create back as a pull request.">
 <meta property="og:title" content="Spellbook">
 <meta property="og:description" content="Shared spells for Claude Code, GitHub Copilot, Cursor, Codex and Gemini CLI. Write your AI tooling once in git, sync it to everyone.">
 <meta property="og:type" content="website">
@@ -258,6 +258,7 @@
     <a class="link" href="#how">How it works</a>
     <a class="link" href="#kinds">What it syncs</a>
     <a class="link" href="#use">Use cases</a>
+    <a class="link" href="#push">Push back</a>
     <a class="link" href="https://github.com/graemer-org/spellbook#readme">Docs</a>
     <a class="btn ghost" href="https://github.com/graemer-org/spellbook">GitHub</a>
   </div>
@@ -515,7 +516,53 @@ standup-notes     skill  claude  mine</span>
   </div>
 </section>
 
-<section id="safe">
+<section id="push">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="eyebrow">Both directions</p>
+      <h2>Push back what you make</h2>
+      <p class="lede">Good skills are born in a project, not in a registry. When one proves useful, or you improve one that came from the registry, send it back from right where it is.</p>
+    </div>
+    <div class="panel">
+      <div>
+        <h3>From your project to a pull request</h3>
+        <ul>
+          <li><strong>It knows what it is looking at.</strong> A skill, instruction, agent, prompt, MCP server or hook, in the form of any of the five tools, is turned into the form the registry holds.</li>
+          <li><strong>It proposes, it never publishes.</strong> You get a new branch and the pull request link. The registry's main branch is not touched, and nothing is sent before you confirm.</li>
+          <li><strong>Secrets stay home.</strong> An MCP server or hook with a token written out is refused, with the exact line to write instead.</li>
+          <li><strong>Your copy keeps working.</strong> It stays where it is until the pull request is merged; then the next sync swaps it for the registry's version and installs it for your other tools.</li>
+          <li><strong>Straight into a team's group</strong> with <code>--group</code>, and with <code>--pr</code> the pull request is opened for you.</li>
+        </ul>
+      </div>
+      <div class="term">
+        <div class="term-bar"><i></i><i></i><i></i><span>my-repo</span></div>
+<pre><span class="c"># what is new or changed here?</span>
+<span class="p">$ </span>spellbook push --project
+<span class="o">KIND   NAME          TOOL    STATUS
+skill  db-migration  claude  local
+agent  reviewer      claude  changed, from acme</span>
+
+<span class="p">$ </span>spellbook push .claude/skills/db-migration \
+    --project --group platform
+<span class="o">skill db-migration (3 files, 4 KB)
+  -> new in acme: skills/db-migration
+They are added to the group "platform" in registry.toml.
+Push this to acme on the new branch
+spellbook/add-db-migration? [y/N]</span> y
+<span class="o">Open a pull request:
+  https://github.com/acme/ai-registry/compare/…</span>
+
+<span class="c"># a secret never leaves your machine</span>
+<span class="p">$ </span>spellbook push mcp tracker --project
+<span class="o">error: env.TRACKER_TOKEN is written out. Write
+"TRACKER_TOKEN": "${TRACKER_TOKEN}" and set that variable
+in your environment.</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="safe" class="band">
   <div class="wrap">
     <div class="section-head">
       <p class="eyebrow">Careful by design</p>
@@ -527,11 +574,13 @@ standup-notes     skill  claude  mine</span>
       <div><h3>Local edits are kept</h3><p>Something you changed after a sync is left alone, with a warning. Only <code>--force</code> overwrites it.</p></div>
       <div><h3>Code needs your permission</h3><p>MCP servers and hooks run programs. A registry installs them only after <code>spellbook registry allow</code>.</p></div>
       <div><h3>A failed fetch removes nothing</h3><p>When a registry cannot be reached, everything it installed stays in place and the command says so.</p></div>
+      <div><h3>Push only proposes</h3><p><code>spellbook push</code> creates a branch and asks first. What reaches everyone is still decided in the registry's pull request.</p></div>
+      <div><h3>Secrets are refused</h3><p>A definition with a token written out does not leave your machine. Push names the value and what to write instead.</p></div>
     </div>
   </div>
 </section>
 
-<section class="band cta">
+<section class="cta">
   <div class="wrap">
     <h2>Open the book</h2>
     <p class="lede">Spellbook is free and open source under the Apache License 2.0. Issues and pull requests are welcome.</p>
