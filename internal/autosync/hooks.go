@@ -29,6 +29,8 @@ func HookFile(target string, loc config.Location) (string, error) {
 	switch target {
 	case "claude":
 		return filepath.Join(loc.Root, ".claude", "settings.json"), nil
+	case "gemini":
+		return filepath.Join(loc.Root, ".gemini", "settings.json"), nil
 	case "copilot":
 		if project {
 			return filepath.Join(loc.Root, ".github", "hooks", "spellbook.json"), nil
@@ -92,14 +94,27 @@ func Enable(target string, loc config.Location) error {
 	default:
 		return editClaudeSettings(path, func(entries []json.RawMessage) ([]json.RawMessage, error) {
 			entries = withoutOurs(entries)
-			ours, err := json.Marshal(map[string]any{
-				"matcher": "startup",
-				"hooks": []any{map[string]any{
+			hook := map[string]any{
+				"type":    "command",
+				"command": command(loc),
+				// Run beside the session instead of delaying its start.
+				"async": true,
+			}
+			if target == "gemini" {
+				// Gemini CLI keeps hooks under the same keys of its
+				// settings file, but has no "async" and counts a timeout
+				// in milliseconds. The session waits for the hook, which
+				// the throttle keeps short on all but one start a day.
+				hook = map[string]any{
+					"name":    "spellbook-autosync",
 					"type":    "command",
 					"command": command(loc),
-					// Run beside the session instead of delaying its start.
-					"async": true,
-				}},
+					"timeout": 120000,
+				}
+			}
+			ours, err := json.Marshal(map[string]any{
+				"matcher": "startup",
+				"hooks":   []any{hook},
 			})
 			if err != nil {
 				return nil, err
@@ -151,7 +166,7 @@ func withoutOurs(entries []json.RawMessage) []json.RawMessage {
 }
 
 // editClaudeSettings changes the SessionStart hooks in a Claude Code
-// settings file. Every other setting, and the order of the keys, stays as
+// settings file, or in one of Gemini CLI, which has the same shape. Every other setting, and the order of the keys, stays as
 // it is.
 func editClaudeSettings(path string, edit func([]json.RawMessage) ([]json.RawMessage, error)) error {
 	data, err := os.ReadFile(path)

@@ -388,7 +388,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			wantMCP[place] = append(wantMCP[place], mcpWant{name: m.name, target: tname, registry: m.registry, commit: m.commit, entry: entry})
 		}
 		for _, h := range hooks {
-			if !h.hook.For(tname) {
+			if !h.hook.For(tname) || (target.HooksByName(tname) && !slices.Contains(h.hook.Tools, tname)) {
 				continue
 			}
 			if !target.HookFires(tname, h.hook.Event) {
@@ -404,6 +404,13 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 				continue
 			}
 			place, err := target.HookFor(tname, loc)
+			if skip("hooks", err) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			event, err := target.HookEvent(tname, h.hook.Event)
 			if skip("hooks", err) {
 				continue
 			}
@@ -426,7 +433,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			if err != nil {
 				return nil, err
 			}
-			wantHooks[place] = append(wantHooks[place], hookWant{id: id, name: h.name, target: tname, registry: h.registry, commit: h.commit, event: h.hook.Event, entry: entry})
+			wantHooks[place] = append(wantHooks[place], hookWant{id: id, name: h.name, target: tname, registry: h.registry, commit: h.commit, event: event, entry: entry})
 		}
 		for _, p := range prompts {
 			place, err := target.PromptFor(tname, cfg.Targets[tname], loc, p.name)
@@ -437,7 +444,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 				return nil, err
 			}
 			if !place.AsSkill {
-				content, err := target.RenderDoc(tname, p.doc.Front, p.doc.Body, nil)
+				content, err := target.RenderPrompt(tname, p.registry, p.doc.Front, p.doc.Body)
 				if err != nil {
 					r.warnf("%s: skipped prompt %q of %s: %v", tname, p.name, p.registry, err)
 					continue
