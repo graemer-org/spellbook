@@ -29,7 +29,9 @@ type Doc struct {
 	// Front is the frontmatter mapping, or nil when the file has none.
 	Front *yaml.Node
 	Body  string
-	raw   string
+	// File is where the file lives, relative to the registry root.
+	File string
+	raw  string
 }
 
 // Hash identifies the content of the file.
@@ -134,6 +136,7 @@ func discoverDocs(root, dir, kind string, check func(Doc) error) ([]Doc, []strin
 			return nil
 		}
 		seen[name] = rel
+		doc.File = rel
 		out = append(out, doc)
 		return nil
 	})

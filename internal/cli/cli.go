@@ -1197,9 +1197,9 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "push [<path> | <kind> <name>]...",
 		Short: "Propose something you created locally to a registry",
-		Long: "Take a skill, instruction, agent or prompt that you created where one of your\n" +
-			"tools reads it, turn it into the form a registry holds, and push it to the\n" +
-			"registry on a new branch. You get the link to open a pull request.\n\n" +
+		Long: "Take a skill, instruction, agent or prompt that you created or changed where\n" +
+			"one of your tools reads it, turn it into the form a registry holds, and push\n" +
+			"it to the registry on a new branch. You get the link to open a pull request.\n\n" +
 			"Name what to push by its path, or by its kind and name. Without arguments,\n" +
 			"push lists what it finds.",
 		Example: "  spellbook push                                   # what could be pushed\n" +
@@ -1224,21 +1224,29 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 				w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 				n := 0
 				for _, c := range all {
+					edited := false
 					if c.Managed && !c.Pending {
-						continue
+						now, err := syncer.HashPath(c.Path)
+						if err != nil || now == c.Hash {
+							continue
+						}
+						edited = true
 					}
 					if n == 0 {
 						fmt.Fprintln(w, "KIND\tNAME\tTOOL\tSTATUS\tPATH")
 					}
 					n++
 					status := "local"
-					if c.Pending {
+					switch {
+					case c.Pending:
 						status = "pushed to " + c.Registry
+					case edited:
+						status = "changed, from " + c.Registry
 					}
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", c.Kind, c.Name, c.Target, status, c.Path)
 				}
 				if n == 0 {
-					fmt.Fprintln(out, "Nothing to push: every skill, instruction, agent and prompt your tools have came from a registry.")
+					fmt.Fprintln(out, "Nothing to push: every skill, instruction, agent and prompt your tools have is as it came from a registry.")
 					return nil
 				}
 				if err := w.Flush(); err != nil {
@@ -1274,13 +1282,25 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 				return fmt.Errorf("registry %s: %w", reg.Name, err)
 			}
 			var files []gitx.File
-			var names []string
-			for _, it := range items {
-				if push.Exists(snap, it) {
-					return fmt.Errorf("registry %s already has a %s named %q; pushing changes to a resource the registry already has is not supported yet", reg.Name, it.Kind, it.Name)
+			var names, remove []string
+			updates := 0
+			for i := range items {
+				it := &items[i]
+				if err := push.Reconcile(snap, reg.Name, it); err != nil {
+					return fmt.Errorf("%s %s: %w", it.Kind, it.Name, err)
+				}
+				if it.Update {
+					updates++
 				}
 				files = append(files, push.Prefix(reg.Path, it.Files)...)
+				for _, r := range it.Remove {
+					remove = append(remove, path.Join(filepath.ToSlash(reg.Path), r))
+				}
 				names = append(names, it.Name)
+			}
+			verb, verbed := "add", "Add"
+			if updates == len(items) {
+				verb, verbed = "update", "Update"
 			}
 			if group != "" && (snap.Manifest == nil || !slices.Contains(snap.Manifest.GroupNames(), group)) {
 				available := "none, it has no registry.toml"
@@ -1290,15 +1310,15 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 				return fmt.Errorf("registry %s has no group %q (available: %s)", reg.Name, group, available)
 			}
 			if branch == "" {
-				branch = "spellbook/add-" + names[0]
+				branch = "spellbook/" + verb + "-" + names[0]
 				if len(names) > 1 {
 					branch += fmt.Sprintf("-and-%d-more", len(names)-1)
 				}
 			}
 			if message == "" {
-				message = fmt.Sprintf("Add %s %s", items[0].Kind, items[0].Name)
+				message = fmt.Sprintf("%s %s %s", verbed, items[0].Kind, items[0].Name)
 				if len(items) > 1 {
-					message = fmt.Sprintf("Add %d resources: %s", len(items), strings.Join(names, ", "))
+					message = fmt.Sprintf("%s %d resources: %s", verbed, len(items), strings.Join(names, ", "))
 				}
 			}
 
@@ -1312,7 +1332,11 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 					count = "1 file"
 				}
 				fmt.Fprintf(out, "%s %s (%s, %s) from %s\n", it.Kind, it.Name, count, size(n), it.Path)
-				fmt.Fprintf(out, "  -> %s: %s\n", reg.Name, path.Join(filepath.ToSlash(reg.Path), it.Dest))
+				arrow := "new in"
+				if it.Update {
+					arrow = "replaces what is in"
+				}
+				fmt.Fprintf(out, "  -> %s %s: %s\n", arrow, reg.Name, path.Join(filepath.ToSlash(reg.Path), it.Dest))
 				for _, note := range it.Notes {
 					fmt.Fprintf(out, "  note: %s\n", note)
 				}
@@ -1320,7 +1344,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 			switch {
 			case group != "":
 				fmt.Fprintf(out, "They are added to the group %q in %s.\n", group, registry.ManifestFile)
-			case snap.Manifest != nil && len(snap.Manifest.Groups) > 0:
+			case updates < len(items) && snap.Manifest != nil && len(snap.Manifest.Groups) > 0:
 				fmt.Fprintf(out, "note: registry %s sorts its resources into groups (%s). Until this is in a group, people who\n      use groups do not get it. Pass --group, or add it in the pull request.\n", reg.Name, strings.Join(snap.Manifest.GroupNames(), ", "))
 			}
 			if dryRun {
@@ -1338,6 +1362,9 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 				if info, err := os.Stat(into); err != nil || !info.IsDir() {
 					return fmt.Errorf("%s is not a directory", into)
 				}
+				if err := gitx.Remove(into, remove); err != nil {
+					return err
+				}
 				if err := gitx.WriteFiles(into, files); err != nil {
 					return err
 				}
@@ -1353,7 +1380,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 						return fmt.Errorf("not confirmed, nothing was sent (pass --yes to skip the question)")
 					}
 				}
-				if err := gitx.Propose(cmd.Context(), reg.URL, reg.Ref, branch, message, files, edit); err != nil {
+				if err := gitx.Propose(cmd.Context(), reg.URL, reg.Ref, branch, message, remove, files, edit); err != nil {
 					return err
 				}
 				fmt.Fprintf(out, "Pushed the branch %s to %s.\n", branch, reg.Name)
@@ -1369,7 +1396,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 			if err := syncer.MarkPending(loc, pending); err != nil {
 				return err
 			}
-			fmt.Fprintln(out, "Your local copy stays. Once the registry offers it, 'spellbook sync' replaces it with the registry's version.")
+			fmt.Fprintln(out, "Your local copy stays. Once the registry has it, 'spellbook sync' replaces it with the registry's version.")
 			return nil
 		},
 	}

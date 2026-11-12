@@ -151,8 +151,10 @@ type File struct {
 // Propose clones the repository at url, puts the files on a new branch
 // based on base, commits them and pushes the branch. An empty base means
 // the default branch. edit, when not nil, may change the checkout before
-// the commit. Nothing is pushed when there is nothing to commit.
-func Propose(ctx context.Context, url, base, branch, message string, files []File, edit func(dir string) error) error {
+// the commit. The paths in remove are deleted before the files are written,
+// for a directory that is replaced as a whole. Nothing is pushed when there
+// is nothing to commit.
+func Propose(ctx context.Context, url, base, branch, message string, remove []string, files []File, edit func(dir string) error) error {
 	dir, err := os.MkdirTemp("", "spellbook-push-")
 	if err != nil {
 		return err
@@ -169,6 +171,9 @@ func Propose(ctx context.Context, url, base, branch, message string, files []Fil
 		return err
 	}
 	if _, err := run(ctx, dir, "checkout", "--quiet", "-b", branch); err != nil {
+		return err
+	}
+	if err := Remove(dir, remove); err != nil {
 		return err
 	}
 	if err := WriteFiles(dir, files); err != nil {
@@ -190,6 +195,19 @@ func Propose(ctx context.Context, url, base, branch, message string, files []Fil
 	}
 	if _, err := run(ctx, dir, "push", "--quiet", "origin", branch); err != nil {
 		return fmt.Errorf("%w (if the branch already exists there, choose another with --branch)", err)
+	}
+	return nil
+}
+
+// Remove deletes the slash-separated paths below dir.
+func Remove(dir string, paths []string) error {
+	for _, p := range paths {
+		if !filepath.IsLocal(filepath.FromSlash(p)) {
+			return fmt.Errorf("refusing to remove %q outside the repository", p)
+		}
+		if err := os.RemoveAll(filepath.Join(dir, filepath.FromSlash(p))); err != nil {
+			return err
+		}
 	}
 	return nil
 }

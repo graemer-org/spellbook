@@ -36,6 +36,9 @@ type Snapshot struct {
 	Commit   string
 	// Dir is the checkout directory, the root of the git repository.
 	Dir string
+	// Root is the registry's root inside the checkout: Dir, or the
+	// subdirectory the subscription is limited to.
+	Root string
 	// Manifest is nil when the registry has no registry.toml.
 	Manifest *Manifest
 	// Groups are the groups the selection is based on: the configured ones,
@@ -142,7 +145,7 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 		warnings = append(warnings, w...)
 	}
 
-	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all, AllInstructions: instructions, AllAgents: agents, AllPrompts: prompts}
+	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Root: root, Manifest: manifest, All: all, AllInstructions: instructions, AllAgents: agents, AllPrompts: prompts}
 	groups := r.Groups
 	if len(groups) > 0 && manifest == nil {
 		return nil, fmt.Errorf("groups are configured, but the registry has no %s", ManifestFile)

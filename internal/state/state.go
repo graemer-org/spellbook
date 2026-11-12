@@ -33,6 +33,10 @@ type Entry struct {
 	// offer it yet. It is kept, and once the registry offers it the sync
 	// may replace it like any other resource it installed.
 	Pending bool `json:"pending,omitempty"`
+	// Base is set for a pending resource the registry already had: the
+	// hash of the registry's version at the time of the push. While the
+	// registry still offers that version, the local one is kept.
+	Base string `json:"base,omitempty"`
 }
 
 // State is the content of a state.json file.

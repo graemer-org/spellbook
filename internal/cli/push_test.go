@@ -54,7 +54,7 @@ func TestPushSkillThenSyncTakesTheRegistrysVersion(t *testing.T) {
 	}
 
 	out := e.mustRun("push", ".claude/skills/db-migration", "-p", "--yes")
-	if !strings.Contains(out, "skill db-migration (2 files") || !strings.Contains(out, "-> acme: skills/db-migration") || !strings.Contains(out, "spellbook/add-db-migration") {
+	if !strings.Contains(out, "skill db-migration (2 files") || !strings.Contains(out, "-> new in acme: skills/db-migration") || !strings.Contains(out, "spellbook/add-db-migration") {
 		t.Errorf("unexpected output:\n%s", out)
 	}
 	if got := show(t, repo, "spellbook/add-db-migration", "skills/db-migration/SKILL.md"); !strings.Contains(got, "Steps. v1") {
@@ -169,13 +169,6 @@ func TestPushRefusesWhatItShouldNotSend(t *testing.T) {
 			t.Errorf("%s should be refused:\n%s", name, out)
 		}
 	}
-	// A name the registry already uses.
-	write(t, filepath.Join(repo, "skills", "review-copy", "SKILL.md"), "---\nname: review-copy\ndescription: x\n---\ntheirs\n")
-	e.commit(repo, "same name")
-	if code, out := e.run("push", "skill", "review-copy", "-p", "--yes"); code == 0 || !strings.Contains(out, "already has a skill") {
-		t.Errorf("a name the registry already has should be refused: exit %d\n%s", code, out)
-	}
-
 	out, _ := exec.Command("git", "-C", repo, "branch", "--list", "spellbook/*").Output()
 	if strings.TrimSpace(string(out)) != "" {
 		t.Errorf("a refused push created a branch: %s", out)
@@ -265,5 +258,110 @@ func TestPullRequestURL(t *testing.T) {
 		if got := push.PullRequestURL(repo, "spellbook/add-x"); got != want {
 			t.Errorf("%s:\n got %s\nwant %s", repo, got, want)
 		}
+	}
+}
+
+func TestPushLocalChangeToSomethingFromTheRegistry(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	skill := filepath.Join(project, ".claude", "skills", "review", "SKILL.md")
+	original := read(t, skill)
+
+	if code, out := e.run("push", "skill", "review", "-p", "--yes"); code == 0 || !strings.Contains(out, "nothing to push") {
+		t.Errorf("an unchanged resource has nothing to push: exit %d\n%s", code, out)
+	}
+
+	write(t, skill, strings.Replace(original, "v1", "my improvement", 1))
+	write(t, filepath.Join(project, ".claude", "skills", "review", "extra.md"), "more\n")
+	if out := e.mustRun("push", "-p"); !strings.Contains(out, "changed, from acme") {
+		t.Errorf("push should list the changed skill:\n%s", out)
+	}
+	out := e.mustRun("push", "skill", "review", "-p", "--yes")
+	if !strings.Contains(out, "replaces what is in acme: skills/review") || !strings.Contains(out, "spellbook/update-review") {
+		t.Errorf("unexpected output:\n%s", out)
+	}
+	if got := show(t, repo, "spellbook/update-review", "skills/review/SKILL.md"); !strings.Contains(got, "my improvement") {
+		t.Errorf("the branch does not hold the change:\n%s", got)
+	}
+	show(t, repo, "spellbook/update-review", "skills/review/extra.md")
+
+	// Until the registry has something new, the local change stays, without
+	// the warning about a local edit.
+	out = e.mustRun("sync", "-p")
+	if !strings.Contains(read(t, skill), "my improvement") || strings.Contains(out, "edited locally") {
+		t.Fatalf("the pushed change must be kept quietly:\n%s", out)
+	}
+	// The registry moving on elsewhere does not change that.
+	e.writeSkills(repo, map[string]string{"skills/other": "v1"})
+	e.commit(repo, "unrelated")
+	out = e.mustRun("sync", "-p")
+	if !strings.Contains(read(t, skill), "my improvement") || strings.Contains(out, "edited locally") {
+		t.Fatalf("an unrelated change in the registry must not undo the pushed change:\n%s", out)
+	}
+
+	e.git(repo, "merge", "--quiet", "spellbook/update-review")
+	out = e.mustRun("sync", "-p")
+	if !strings.Contains(read(t, skill), "my improvement") || strings.Contains(out, "warning") {
+		t.Errorf("after the merge everything should be in step:\n%s", out)
+	}
+	if out := e.mustRun("list", "-p"); strings.Contains(out, "pushed") {
+		t.Errorf("after the merge nothing is pending:\n%s", out)
+	}
+	if !strings.Contains(read(t, filepath.Join(project, ".github", "skills", "review", "SKILL.md")), "my improvement") {
+		t.Error("the other tool should get the merged change")
+	}
+}
+
+func TestPushKeepsWhatTheLocalFormCannotCarry(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	write(t, filepath.Join(repo, "agents", "reviewer.md"), "---\ndescription: Reviews code\ntools: Read, Grep\nclaude:\n  model: opus\ncopilot:\n  model: gpt-5\n---\nYou review code. v1\n")
+	write(t, filepath.Join(repo, "instructions", "tf.md"), "---\ndescription: Terraform style\npaths:\n  - \"**/*.tf\"\n---\nPin versions.\n")
+	e.commit(repo, "agent and instruction")
+	e.mustRun("sync", "-p")
+
+	agent := filepath.Join(project, ".claude", "agents", "reviewer.md")
+	write(t, agent, strings.Replace(read(t, agent), "v1", "v2 from the project", 1))
+	rule := filepath.Join(project, ".claude", "rules", "tf.md")
+	write(t, rule, strings.Replace(read(t, rule), "Pin versions.", "Pin versions and providers.", 1))
+
+	out := e.mustRun("push", ".claude/agents/reviewer.md", ".claude/rules/tf.md", "-p", "--yes", "--branch", "b")
+	got := show(t, repo, "b", "agents/reviewer.md")
+	for _, want := range []string{"v2 from the project", "copilot:\n    model: gpt-5", "claude:\n    model: opus", "description: Reviews code"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the agent in the registry misses %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "name: reviewer") {
+		t.Errorf("the name Claude Code needs does not belong in the registry:\n%s", got)
+	}
+	if !strings.Contains(out, "the registry's settings for copilot are kept") {
+		t.Errorf("the user should be told what was kept:\n%s", out)
+	}
+	ins := show(t, repo, "b", "instructions/tf.md")
+	if !strings.Contains(ins, "description: Terraform style") || !strings.Contains(ins, "Pin versions and providers.") || strings.Contains(ins, "Installed by spellbook") {
+		t.Errorf("the instruction lost its description or kept the install note:\n%s", ins)
+	}
+}
+
+func TestPushRestoresAPrefixedName(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	e.mustRun("registry", "set", "acme", "--prefix", "all", "-p")
+	skill := filepath.Join(project, ".claude", "skills", "acme-review", "SKILL.md")
+	write(t, skill, strings.Replace(read(t, skill), "v1", "v2", 1))
+	e.mustRun("push", "skill", "acme-review", "-p", "--yes", "--branch", "b")
+	got := show(t, repo, "b", "skills/review/SKILL.md")
+	if !strings.Contains(got, "name: review\n") || !strings.Contains(got, "v2") {
+		t.Errorf("the change should go to the skill under its own name:\n%s", got)
+	}
+}
+
+func TestPushReplacesAResourceOfTheSameName(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	write(t, filepath.Join(repo, "skills", "notes", "SKILL.md"), "---\nname: notes\ndescription: Theirs\n---\ntheirs\n")
+	e.commit(repo, "notes")
+	// Not synced yet, and the project has its own skill of that name.
+	write(t, filepath.Join(project, ".claude", "skills", "notes", "SKILL.md"), "---\nname: notes\ndescription: Mine\n---\nmine\n")
+	out := e.mustRun("push", "skill", "notes", "-p", "--yes")
+	if !strings.Contains(out, "replaces what is in acme") || !strings.Contains(show(t, repo, "spellbook/update-notes", "skills/notes/SKILL.md"), "mine") {
+		t.Errorf("a local resource with a name the registry uses is an update, and says so:\n%s", out)
 	}
 }

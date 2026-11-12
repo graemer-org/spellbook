@@ -47,6 +47,9 @@ type Candidate struct {
 	Managed, Pending bool
 	// Registry is where a managed resource came from.
 	Registry string
+	// Hash is the recorded hash of a managed resource, and StateKind the
+	// kind it is recorded as.
+	Hash, StateKind string
 }
 
 // stateKind maps a kind to the kind recorded in the state file.
@@ -64,7 +67,12 @@ func (c Candidate) stateKind() string {
 
 // PendingItem is what MarkPending needs to know about the candidate.
 func (c Candidate) PendingItem(reg string) syncer.PendingItem {
-	return syncer.PendingItem{Abs: c.Path, Kind: c.stateKind(), Name: c.Name, Target: c.Target, Registry: reg}
+	p := syncer.PendingItem{Abs: c.Path, Kind: c.stateKind(), Name: c.Name, Target: c.Target, Registry: reg}
+	if c.Managed && !c.Pending {
+		// The registry's version it was changed from.
+		p.Base = c.Hash
+	}
+	return p
 }
 
 // probe stands in for a name when asking a target where it keeps a kind.
@@ -88,7 +96,7 @@ func Candidates(loc config.Location, cfg *config.Config) ([]Candidate, error) {
 		seen[abs] = true
 		c := Candidate{Kind: kind, Name: name, Target: tool, Path: abs}
 		if e, ok := recorded[pathKey(loc.Root, abs)]; ok {
-			c.Managed, c.Pending, c.Registry = true, e.Pending, e.Registry
+			c.Managed, c.Pending, c.Registry, c.Hash, c.StateKind = true, e.Pending, e.Registry, e.Hash, e.Kind
 		}
 		out = append(out, c)
 	}
@@ -156,6 +164,10 @@ type Item struct {
 	Files []gitx.File
 	// Notes tell the user what was changed on the way.
 	Notes []string
+	// Update is true when the registry already has the resource, and
+	// Remove then lists what is deleted before Files are written.
+	Update bool
+	Remove []string
 }
 
 // Select picks the candidates the arguments name. An argument is a path,
@@ -197,10 +209,24 @@ func Select(all []Candidate, args []string, from string) ([]Item, error) {
 		if len(matches) == 0 {
 			return nil, fmt.Errorf("found no %s; run 'spellbook push' without arguments to see what can be pushed", what)
 		}
-		var built []Item
+		// The same resource is usually installed for several tools. Only
+		// the copies that differ from the registry's version matter.
+		var changed []Candidate
 		for _, c := range matches {
 			if c.Managed && !c.Pending {
-				return nil, fmt.Errorf("%s came from registry %s and is managed by spellbook; pushing changes to a resource the registry already has is not supported yet", what, c.Registry)
+				if now, err := syncer.HashPath(c.Path); err == nil && now == c.Hash {
+					continue
+				}
+			}
+			changed = append(changed, c)
+		}
+		if len(changed) == 0 {
+			return nil, fmt.Errorf("%s is exactly what registry %s has; there is nothing to push", what, matches[0].Registry)
+		}
+		var built []Item
+		for _, c := range changed {
+			if c.Managed && !c.Pending && c.StateKind != c.stateKind() {
+				return nil, fmt.Errorf("%s was installed from a %s in registry %s; pushing changes to it is not supported yet", what, c.StateKind, c.Registry)
 			}
 			it, err := build(c)
 			if err != nil {
@@ -281,18 +307,7 @@ func build(c Candidate) (Item, error) {
 		if err != nil {
 			return it, err
 		}
-		front := &yaml.Node{Kind: yaml.MappingNode}
-		if ins.Description != "" {
-			front.Content = append(front.Content, str("description"), str(ins.Description))
-		}
-		if len(ins.Paths) > 0 {
-			seq := &yaml.Node{Kind: yaml.SequenceNode}
-			for _, p := range ins.Paths {
-				seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: p, Style: yaml.DoubleQuotedStyle})
-			}
-			front.Content = append(front.Content, str("paths"), seq)
-		}
-		if out, err = render(front, strings.TrimLeft(ins.Body, "\n")); err != nil {
+		if out, err = renderInstruction(ins); err != nil {
 			return it, err
 		}
 	case KindAgent, KindPrompt:
@@ -386,20 +401,137 @@ func render(front *yaml.Node, body string) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// Exists reports whether the registry already has a resource of the
-// item's kind and name.
-func Exists(snap *registry.Snapshot, it Item) bool {
+var frontmatterName = regexp.MustCompile(`(?m)^name:.*$`)
+
+// Reconcile fits an item to what the registry already holds. When the
+// registry has a resource of that kind and name, the item becomes an
+// update of it: it goes where the registry keeps it, and what the tool's
+// form cannot carry (another tool's settings, a description the tool does
+// not store) is taken over from the registry's version. regName is the
+// registry's name, used to recognise a name that was installed with it as
+// a prefix.
+func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
+	names := []string{it.Name}
+	if n, ok := strings.CutPrefix(it.Name, regName+"-"); ok && it.Managed {
+		names = append(names, n)
+	}
+	pick := func(has func(name string) bool) string {
+		for _, n := range names {
+			if has(n) {
+				return n
+			}
+		}
+		return ""
+	}
 	switch it.Kind {
 	case KindSkill:
-		return slices.ContainsFunc(snap.All, func(s registry.Skill) bool { return s.Name == it.Name })
+		var orig registry.Skill
+		name := pick(func(n string) bool {
+			i := slices.IndexFunc(snap.All, func(s registry.Skill) bool { return s.Name == n })
+			if i >= 0 {
+				orig = snap.All[i]
+			}
+			return i >= 0
+		})
+		if name == "" {
+			return nil
+		}
+		rel, err := filepath.Rel(snap.Root, orig.Dir)
+		if err != nil {
+			return err
+		}
+		dest := filepath.ToSlash(rel)
+		for i := range it.Files {
+			f := &it.Files[i]
+			f.Path = dest + strings.TrimPrefix(f.Path, it.Dest)
+			if name != it.Name && f.Path == dest+"/"+registry.SkillFile {
+				// Installed under a prefixed name; the registry knows it
+				// by its own.
+				f.Data = frontmatterName.ReplaceAll(f.Data, []byte("name: "+name))
+			}
+		}
+		it.Dest, it.Update, it.Remove = dest, true, []string{dest}
 	case KindInstruction:
-		return slices.ContainsFunc(snap.AllInstructions, func(i registry.Instruction) bool { return i.Name == it.Name })
-	case KindAgent:
-		return slices.ContainsFunc(snap.AllAgents, func(d registry.Doc) bool { return d.Name == it.Name })
-	case KindPrompt:
-		return slices.ContainsFunc(snap.AllPrompts, func(d registry.Doc) bool { return d.Name == it.Name })
+		i := -1
+		if pick(func(n string) bool {
+			i = slices.IndexFunc(snap.AllInstructions, func(x registry.Instruction) bool { return x.Name == n })
+			return i >= 0
+		}) == "" {
+			return nil
+		}
+		orig := snap.AllInstructions[i]
+		local, err := registry.ParseInstruction(it.Name, string(it.Files[0].Data))
+		if err != nil {
+			return err
+		}
+		if local.Description == "" {
+			local.Description = orig.Description
+		}
+		data, err := renderInstruction(local)
+		if err != nil {
+			return err
+		}
+		it.Dest, it.Update = orig.File, true
+		it.Files = []gitx.File{{Path: orig.File, Data: data}}
+	case KindAgent, KindPrompt:
+		docs := snap.AllAgents
+		if it.Kind == KindPrompt {
+			docs = snap.AllPrompts
+		}
+		i := -1
+		if pick(func(n string) bool {
+			i = slices.IndexFunc(docs, func(d registry.Doc) bool { return d.Name == n })
+			return i >= 0
+		}) == "" {
+			return nil
+		}
+		orig := docs[i]
+		local, err := registry.ParseDoc(it.Name, string(it.Files[0].Data))
+		if err != nil {
+			return err
+		}
+		front := local.Front
+		if front == nil {
+			front = &yaml.Node{Kind: yaml.MappingNode}
+		}
+		// The local file was written for one tool. What the registry holds
+		// for the other tools is not in it and must not be lost.
+		var kept []string
+		if orig.Front != nil {
+			for j := 0; j+1 < len(orig.Front.Content); j += 2 {
+				key := orig.Front.Content[j]
+				if target.Known(key.Value) && key.Value != it.Target {
+					front.Content = append(front.Content, key, orig.Front.Content[j+1])
+					kept = append(kept, key.Value)
+				}
+			}
+		}
+		if len(kept) > 0 {
+			it.Notes = append(it.Notes, fmt.Sprintf("the registry's settings for %s are kept as they are", strings.Join(kept, ", ")))
+		}
+		data, err := render(front, local.Body)
+		if err != nil {
+			return err
+		}
+		it.Dest, it.Update = orig.File, true
+		it.Files = []gitx.File{{Path: orig.File, Data: data}}
 	}
-	return false
+	return nil
+}
+
+func renderInstruction(ins registry.Instruction) ([]byte, error) {
+	front := &yaml.Node{Kind: yaml.MappingNode}
+	if ins.Description != "" {
+		front.Content = append(front.Content, str("description"), str(ins.Description))
+	}
+	if len(ins.Paths) > 0 {
+		seq := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, p := range ins.Paths {
+			seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: p, Style: yaml.DoubleQuotedStyle})
+		}
+		front.Content = append(front.Content, str("paths"), seq)
+	}
+	return render(front, strings.TrimLeft(ins.Body, "\n"))
 }
 
 // groupKey is the key of a group in registry.toml that lists a kind.

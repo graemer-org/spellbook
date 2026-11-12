@@ -112,6 +112,13 @@ go vet ./... && gofmt -l .    # must be clean before committing
 - **A pushed resource is pending.** It is recorded in the state with
   `pending`, is never pruned while the registry does not offer it, and is
   replaced by the registry's version once it does, unless it was edited.
+  For a change to something the registry already had, `base` holds the hash
+  of the version it was made from: while the registry still offers exactly
+  that, the local change is kept.
+- **An update must not lose what the local form cannot carry.** A tool's
+  copy of an agent holds only that tool's settings. `push.Reconcile` takes
+  the other tools' sections, and a description a tool does not store, from
+  the registry's version.
 - **`doctor` reports, it never repairs.** It changes nothing, says for
   every finding what the user can do, and fails only for what stops
   Spellbook from working (git, configuration, an unreachable registry).

@@ -589,9 +589,15 @@ func (r *run) applyItems(want map[string]item) error {
 		case onDisk == it.hash:
 			c.Unchanged++
 			r.entries = append(r.entries, entry)
+		case prev.Pending && prev.Base == it.hash && !r.opts.Force:
+			// A local change that was pushed, while the registry still
+			// offers the version it was made from. The change stays until
+			// the registry has something new.
+			c.Unchanged++
+			r.entries = append(r.entries, prev)
 		case onDisk != prev.Hash && !r.opts.Force:
 			c.Skipped++
-			r.warnf("%s: skipped %s %q: %s was edited locally (use --force to overwrite)", it.target, it.kind, it.name, it.abs)
+			r.warnf("%s: skipped %s %q: %s was edited locally (use --force to overwrite it, or 'spellbook push' to propose your change)", it.target, it.kind, it.name, it.abs)
 			r.entries = append(r.entries, prev)
 		default:
 			if !r.opts.DryRun {

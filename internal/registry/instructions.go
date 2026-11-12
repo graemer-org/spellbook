@@ -28,6 +28,8 @@ type Instruction struct {
 	// files; otherwise it always applies.
 	Paths []string
 	Body  string
+	// File is where the instruction lives, relative to the registry root.
+	File string
 }
 
 // Scoped reports whether the instruction is limited to certain paths.
@@ -79,6 +81,7 @@ func DiscoverInstructions(root string) ([]Instruction, []string, error) {
 			return nil
 		}
 		seen[name] = rel
+		ins.File = rel
 		out = append(out, ins)
 		return nil
 	})

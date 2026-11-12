@@ -296,17 +296,18 @@ it too.
 
 Skills are usually born in a project: someone writes one in
 `.claude/skills/`, it proves useful, and it should go to the registry so
-everyone gets it. `spellbook push` does that.
+everyone gets it. Or someone improves a skill that came from the registry
+right where they use it. `spellbook push` sends both back.
 
 ```sh
-spellbook push                                         # what is local and could be pushed
+spellbook push                                         # what is new or changed locally
 spellbook push .claude/skills/db-migration --to acme   # by path
 spellbook push agent reviewer --to acme                # or by kind and name
 ```
 
 ```
 skill db-migration (3 files, 4 KB) from .claude/skills/db-migration
-  -> acme: skills/db-migration
+  -> new in acme: skills/db-migration
 Push this to git@github.com:acme/ai-registry.git on the new branch spellbook/add-db-migration? [y/N] y
 Pushed the branch spellbook/add-db-migration to acme.
 Open a pull request:
@@ -327,6 +328,12 @@ is reviewed like any other.
   is merged, `spellbook sync` replaces it with the registry's version and
   installs it for your other tools. If you edit it in the meantime, the
   sync leaves it alone and says so.
+- **Changes to something from the registry** work the same way. Edit it
+  where your tool reads it and push it; the branch is then named
+  `spellbook/update-<name>`. Your change stays in place until the registry
+  has a new version of that resource. What your tool's copy does not
+  contain, such as another tool's settings for an agent, is kept from the
+  registry's version.
 - **Groups.** `--group platform` also adds it to that group in the
   registry's `registry.toml`. Without it, push reminds you that people who
   use groups will not get it until it is in one.
@@ -342,8 +349,9 @@ is reviewed like any other.
 | `--into ~/code/ai-registry` | write into your local clone instead of pushing |
 | `--yes` | do not ask |
 
-A resource the registry already has cannot be pushed yet; that includes
-changes you made to something that came from the registry.
+Changes to an always-on instruction for Copilot, which lives in a block of
+`copilot-instructions.md`, cannot be pushed yet. Edit the instruction's
+other copy, for example the file in `.claude/rules/`, and push that.
 
 ## Writing a registry
 

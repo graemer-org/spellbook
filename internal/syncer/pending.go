@@ -11,7 +11,14 @@ type PendingItem struct {
 	Abs string
 	// Kind is one of the state kinds, such as KindSkill.
 	Kind, Name, Target, Registry string
+	// Base is the recorded hash of the registry's version, when the
+	// resource came from the registry and was changed locally.
+	Base string
 }
+
+// HashPath returns the content hash the state file records for a file or
+// directory.
+func HashPath(path string) (string, error) { return hashPath(path) }
 
 // MarkPending records pushed resources in the state file, with the content
 // they have now. From then on the sync treats them as its own: it keeps
@@ -30,7 +37,7 @@ func MarkPending(loc config.Location, items []PendingItem) error {
 			return err
 		}
 		key := pathKey(loc.Root, it.Abs)
-		byPath[key] = state.Entry{Path: key, Kind: it.Kind, Name: it.Name, Target: it.Target, Registry: it.Registry, Hash: hash, Pending: true}
+		byPath[key] = state.Entry{Path: key, Kind: it.Kind, Name: it.Name, Target: it.Target, Registry: it.Registry, Hash: hash, Pending: true, Base: it.Base}
 	}
 	st.Entries = st.Entries[:0]
 	for _, e := range byPath {
