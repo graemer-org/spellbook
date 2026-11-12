@@ -43,6 +43,9 @@ const (
 	// KindMCPCLI is an MCP server in a file that belongs to a tool and is
 	// only changed through that tool's command line.
 	KindMCPCLI = "mcp-cli"
+	// KindMCPTOML is an MCP server kept as one table of a TOML file that
+	// holds the tool's other settings. Its state path is like KindMCP's.
+	KindMCPTOML = "mcp-toml"
 	// KindHook is a hook entry in a JSON file that may hold other hooks
 	// and settings. Its state path is "<file>#<hook id>".
 	KindHook = "hook"
@@ -362,7 +365,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			if err != nil {
 				return nil, err
 			}
-			content, err := target.RenderDoc(tname, a.doc.Front, a.doc.Body, target.AgentFields(tname, a.name))
+			content, err := target.RenderAgent(tname, a.registry, a.name, a.doc.Front, a.doc.Body)
 			if err != nil {
 				r.warnf("%s: skipped agent %q of %s: %v", tname, a.name, a.registry, err)
 				continue
@@ -386,6 +389,10 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 		}
 		for _, h := range hooks {
 			if !h.hook.For(tname) {
+				continue
+			}
+			if !target.HookFires(tname, h.hook.Event) {
+				unsupported["hooks"]++
 				continue
 			}
 			if loc.Scope == config.ScopeProject && slices.ContainsFunc(target.ReadsProjectHooksOf(tname), func(other string) bool {
@@ -477,6 +484,9 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 		return nil, err
 	}
 	if err := r.applyMCP(ctx, wantMCP); err != nil {
+		return nil, err
+	}
+	if err := r.applyMCPTOML(wantMCP); err != nil {
 		return nil, err
 	}
 	if err := r.applyHooks(wantHooks); err != nil {
@@ -588,7 +598,7 @@ func (r *run) applyItems(want map[string]item) error {
 	}
 
 	for key, e := range r.old {
-		if e.Kind == KindBlock || e.Kind == KindMCP || e.Kind == KindMCPCLI || e.Kind == KindHook {
+		if e.Kind == KindBlock || e.Kind == KindMCP || e.Kind == KindMCPCLI || e.Kind == KindMCPTOML || e.Kind == KindHook {
 			continue
 		}
 		if _, keep := want[key]; keep {

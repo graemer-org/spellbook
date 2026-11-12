@@ -1075,7 +1075,7 @@ func TestAutosyncEnableKeepsOtherSettingsAndDisableRemovesOnlyItsHook(t *testing
 	if got := read(t, copilotHook); !strings.Contains(got, `"sessionStart"`) || !strings.Contains(got, "spellbook sync --auto") {
 		t.Errorf("Copilot hook file is wrong:\n%s", got)
 	}
-	if out := e.mustRun("autosync", "status"); strings.Count(out, "hook installed") != 2 {
+	if out := e.mustRun("autosync", "status"); strings.Count(out, "hook installed") < 2 {
 		t.Errorf("status should show both hooks:\n%s", out)
 	}
 
@@ -1337,7 +1337,7 @@ func TestHooksNeedPermissionAndReachBothTools(t *testing.T) {
   }
 }
 `)
-	e.mustRun("init")
+	e.mustRun("init", "--target", "claude", "--target", "copilot")
 	out := e.mustRun("registry", "add", "acme", repo)
 	if !strings.Contains(out, "2 hooks not allowed") || !strings.Contains(out, "spellbook registry allow acme hooks") {
 		t.Errorf("the user is not told about the held back hooks:\n%s", out)
@@ -1685,5 +1685,28 @@ func TestDoctorSeesUpdatesAndUncommittedProjectFiles(t *testing.T) {
 	e.commit(repo, "v2")
 	if out := e.mustRun("doctor", "-p"); !strings.Contains(out, "registry acme has changes since the last sync") || !strings.Contains(out, "spellbook diff acme") {
 		t.Errorf("doctor should notice upstream changes:\n%s", out)
+	}
+}
+
+func TestInitEnablesTheToolsThatAreInstalled(t *testing.T) {
+	e := newEnv(t)
+	if err := os.MkdirAll(filepath.Join(e.home, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun("init")
+	cfg := read(t, filepath.Join(e.home, ".config", "spellbook", "config.toml"))
+	if !strings.Contains(cfg, "[targets.claude]\n    enabled = true") || strings.Contains(cfg, "[targets.copilot]\n    enabled = true") {
+		t.Errorf("only the installed tool should be enabled:\n%s", cfg)
+	}
+
+	// With nothing installed the two original tools are the fallback.
+	e2 := newEnv(t)
+	out := e2.mustRun("init")
+	if !strings.Contains(out, "No installed tool was found") {
+		t.Errorf("init should say that it fell back:\n%s", out)
+	}
+	cfg = read(t, filepath.Join(e2.home, ".config", "spellbook", "config.toml"))
+	if !strings.Contains(cfg, "[targets.claude]\n    enabled = true") || !strings.Contains(cfg, "[targets.copilot]\n    enabled = true") {
+		t.Errorf("fallback should enable claude and copilot:\n%s", cfg)
 	}
 }

@@ -71,6 +71,23 @@ func Verify(loc config.Location) (int, []Problem, error) {
 			}
 			continue
 		}
+		if e.Kind == KindMCPTOML {
+			i := strings.LastIndex(e.Path, "#")
+			if i < 0 {
+				continue
+			}
+			f, err := readTOML(absPath(loc.Root, e.Path[:i]))
+			if err != nil {
+				problems = append(problems, Problem{Entry: e})
+				continue
+			}
+			if hash, ok := f.hash(tomlServers, e.Name); !ok {
+				problems = append(problems, Problem{Entry: e, Missing: true})
+			} else if hash != e.Hash {
+				problems = append(problems, Problem{Entry: e})
+			}
+			continue
+		}
 		if e.Kind == KindHook {
 			i := strings.LastIndex(e.Path, "#")
 			if i < 0 {

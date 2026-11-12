@@ -79,7 +79,8 @@ func newInit(project *bool) *cobra.Command {
 		Use:   "init",
 		Short: "Create the configuration file",
 		Long: "Create the home configuration, or with --project a spellbook.toml in the\n" +
-			"current directory. Both targets are enabled unless --target is given.",
+			"current directory. The tools installed on this machine are enabled unless\n" +
+			"--target says otherwise.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var loc config.Location
@@ -99,8 +100,24 @@ func newInit(project *bool) *cobra.Command {
 			if config.Exists(loc) {
 				return fmt.Errorf("%s already exists", loc.ConfigPath)
 			}
+			out := cmd.OutOrStdout()
 			if len(targets) == 0 {
-				targets = target.Names()
+				// Without a choice, enable the tools that are installed here.
+				home, err := os.UserHomeDir()
+				if err != nil {
+					return err
+				}
+				for _, name := range target.Names() {
+					if d := target.HomeDir(name); d != "" {
+						if _, err := os.Stat(filepath.Join(home, d)); err == nil {
+							targets = append(targets, name)
+						}
+					}
+				}
+				if len(targets) == 0 {
+					targets = []string{"claude", "copilot"}
+					fmt.Fprintf(out, "No installed tool was found, so claude and copilot are enabled. Choose others with --target (%s).\n", strings.Join(target.Names(), ", "))
+				}
 			}
 			cfg := &config.Config{Targets: map[string]config.Target{}}
 			for _, name := range target.Names() {
@@ -115,7 +132,6 @@ func newInit(project *bool) *cobra.Command {
 			if err := config.Save(loc, cfg); err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "Created %s\n", loc.ConfigPath)
 			for _, name := range cfg.EnabledTargets() {
 				dir, err := target.SkillsDir(name, cfg.Targets[name], loc)
@@ -128,7 +144,7 @@ func newInit(project *bool) *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringSliceVar(&targets, "target", nil, "target to enable (claude, copilot); repeatable")
+	cmd.Flags().StringSliceVar(&targets, "target", nil, "tool to enable: "+strings.Join(target.Names(), ", ")+"; repeatable (default: the tools installed here)")
 	return cmd
 }
 
