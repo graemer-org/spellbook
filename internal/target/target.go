@@ -86,6 +86,9 @@ type Spec struct {
 	// Prompt returns where a prompt is written. skillsDir is the target's
 	// skills directory, for tools that run prompts as skills.
 	Prompt func(loc config.Location, skillsDir, name string) (PromptPlace, bool)
+	// PromptFile returns the content of a prompt file for a tool that does
+	// not read prompts as Markdown with frontmatter. Nil means it does.
+	PromptFile func(registry, description, body string) []byte
 
 	// MCP returns where MCP servers are stored.
 	MCP func(loc config.Location) (MCPPlace, bool)
@@ -96,6 +99,13 @@ type Spec struct {
 	// tool's form. The command already carries the marker.
 	Hooks     func(loc config.Location) (HookPlace, bool)
 	HookEntry func(command, matcher string, timeout int) map[string]any
+	// HookEvent returns the tool's own name for an event, and false when
+	// it has no such event. Nil means it uses Claude Code's names.
+	HookEvent func(event string) (string, bool)
+	// HooksByName is true when a hook reaches the tool only if its "tools"
+	// list names it, because hooks written for the other tools would not
+	// work in it.
+	HooksByName bool
 	// ReadsProjectHooksOf names tools whose project hooks file this tool
 	// reads as well. A hook written there is not written again for this
 	// tool, so it does not run twice.
@@ -279,6 +289,29 @@ func RenderMCP(name string, raw []byte) ([]byte, error) {
 	return json.Marshal(def)
 }
 
+// HookEvent returns what the named tool calls an event, which registries
+// give by Claude Code's name.
+func HookEvent(name, event string) (string, error) {
+	s, err := spec(name)
+	if err != nil {
+		return "", err
+	}
+	if s.HookEvent == nil {
+		return event, nil
+	}
+	own, ok := s.HookEvent(event)
+	if !ok {
+		return "", ErrUnsupported
+	}
+	return own, nil
+}
+
+// HooksByName reports whether the named tool only takes the hooks whose
+// "tools" list names it.
+func HooksByName(name string) bool {
+	return specs[name].HooksByName
+}
+
 // HookFor returns where hooks of a target are stored.
 func HookFor(name string, loc config.Location) (HookPlace, error) {
 	s, err := spec(name)
@@ -377,6 +410,35 @@ func RenderDoc(name string, front *yaml.Node, body string, set [][2]string) ([]b
 	}
 	b.WriteString(body)
 	return []byte(b.String()), nil
+}
+
+// RenderPrompt returns the content of a prompt that is installed as a file
+// for one target: Markdown with the frontmatter as RenderDoc writes it, or
+// the tool's own format.
+func RenderPrompt(name, registry string, front *yaml.Node, body string) ([]byte, error) {
+	s, ok := specs[name]
+	if !ok || s.PromptFile == nil {
+		return RenderDoc(name, front, body, nil)
+	}
+	description := ""
+	find := func(m *yaml.Node, key string) *yaml.Node {
+		if m == nil || m.Kind != yaml.MappingNode {
+			return nil
+		}
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if m.Content[i].Value == key {
+				return m.Content[i+1]
+			}
+		}
+		return nil
+	}
+	// The tool's own section wins, as it does for frontmatter.
+	for _, m := range []*yaml.Node{front, find(front, name)} {
+		if d := find(m, "description"); d != nil && d.Kind == yaml.ScalarNode {
+			description = d.Value
+		}
+	}
+	return s.PromptFile(registry, description, body), nil
 }
 
 func isSet(set [][2]string, key string) bool {
