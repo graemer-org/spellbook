@@ -1,8 +1,8 @@
 # Spellbook
 
 Spellbook is a CLI that subscribes to git repositories ("registries") and
-copies the AI tooling they contain into the places Claude Code and GitHub
-Copilot read it from. It is modelled on the profile registry of Granted.
+copies the AI tooling they contain into the places Claude Code, GitHub
+Copilot, Cursor, Codex and Gemini CLI read it from. It is modelled on the profile registry of Granted.
 
 The binary is `spellbook`. There is no alias or short form.
 
@@ -58,18 +58,28 @@ go vet ./... && gofmt -l .    # must be clean before committing
   file, and there only the text between `spellbook:begin` and
   `spellbook:end` markers may change. A block that is not in the state file
   is left alone.
-- **Frontmatter of agents and prompts is passed through.** Do not drop
-  fields Spellbook does not know. Only the `claude:` and `copilot:` sections
-  are interpreted, and `name` is set to the installed name.
+- **`init` enables what is installed.** Without `--target` it enables the
+  tools whose home directory exists, and falls back to claude and copilot.
+- **Say how well a tool was verified.** The README states per tool what
+  its formats were checked against. Cursor is unverified until someone
+  checks it against Cursor's documentation or a real installation.
+- **Frontmatter of agents and prompts is passed through.** Codex is the
+  exception: its agent files reject unknown keys, so only the known fields
+  and the `codex:` section are written. For the other tools, do not drop
+  fields Spellbook does not know. Only the sections named after a tool are
+  interpreted, and `name` is set to the installed name where the tool
+  identifies an agent by it.
 - **Syncing twice changes nothing.** The second run must report everything
   as unchanged and must not rewrite any file.
 - **Guarded kinds need permission.** MCP servers and hooks run programs, so
   a registry installs them only when its `allow` list names `mcp` or
   `hooks`. Anything added later that executes code must be guarded the same
   way.
-- **Hooks use Claude Code's event names for both tools.** Copilot accepts
-  them and then applies Claude Code's matcher rules and input format. A
-  hook entry is Spellbook's when its command ends in `# spellbook:<id>`.
+- **Hooks are written with Claude Code's event names.** Copilot and Codex
+  accept that form. A tool whose tool names or hook input differ (Cursor,
+  Gemini CLI) sets `HooksByName` and gets a hook only when its `tools` list
+  names it; its event names are translated. A hook entry is Spellbook's
+  when its command ends in `# spellbook:<id>`.
 - **No hook runs twice.** In a project Copilot also reads
   `.claude/settings.json`, so a hook written there for Claude Code is not
   written to `.github/hooks/` as well.

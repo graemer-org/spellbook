@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Spellbook: shared spells for Claude Code and GitHub Copilot</title>
-<meta name="description" content="Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in git. Spellbook installs them into Claude Code and GitHub Copilot and keeps them up to date.">
+<title>Spellbook: shared spells for your AI coding agents</title>
+<meta name="description" content="Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in git. Spellbook installs them into Claude Code, GitHub Copilot, Cursor, Codex and Gemini CLI and keeps them up to date.">
 <meta property="og:title" content="Spellbook">
-<meta property="og:description" content="Shared spells for Claude Code and GitHub Copilot. Write your AI tooling once in git, sync it to everyone.">
+<meta property="og:description" content="Shared spells for Claude Code, GitHub Copilot, Cursor, Codex and Gemini CLI. Write your AI tooling once in git, sync it to everyone.">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 18C24 14 13 14 5 17v32c8-3 19-3 27 1 8-4 19-4 27-1V17c-8-3-19-3-27 1z' fill='%235b21b6'/%3E%3Cpath d='M32 15C25 11 15 11 8 14v30c7-3 17-3 24 1z' fill='%23faf5ff'/%3E%3Cpath d='M32 15c7-4 17-4 24-1v30c-7-3-17-3-24 1z' fill='%23f3e8ff'/%3E%3Cpath d='M40 42v16l4-4 4 4V43z' fill='%23f59e0b'/%3E%3C/svg%3E">
 <style>
@@ -181,6 +181,16 @@
   .kind .tools { margin-top: 14px; font-size: .8rem; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
   .pill { border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; background: var(--bg); }
   .pill.ok::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+  .support { margin-top: 36px; overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+  .support table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: .95rem; }
+  .support th, .support td { padding: 12px 14px; text-align: center; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .support tbody tr:last-child th, .support tbody tr:last-child td { border-bottom: 0; }
+  .support thead th { font-size: .82rem; color: var(--muted); font-weight: 600; background: var(--surface-2); }
+  .support tbody th { text-align: left; font-weight: 600; }
+  .support td { color: var(--muted); font-size: .88rem; }
+  .support td.y { color: var(--ok); font-weight: 700; font-size: 1.05rem; }
+  .support td.n { color: var(--muted); }
+  .note { color: var(--muted); font-size: .92rem; margin: 14px 0 0; max-width: 78ch; }
   @media (max-width: 860px) { .kinds { grid-template-columns: 1fr 1fr; } }
   @media (max-width: 560px) { .kinds { grid-template-columns: 1fr; } }
 
@@ -258,8 +268,8 @@
   <div class="wrap">
     <div>
       <p class="eyebrow">Open source · Apache-2.0</p>
-      <h1>Shared spells for <em>Claude Code</em> and <em>GitHub Copilot</em></h1>
-      <p class="lede">Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in a git repository. Spellbook installs them into both tools and keeps everyone up to date.</p>
+      <h1>Shared spells for your <em>AI coding agents</em></h1>
+      <p class="lede">Keep your team's skills, instructions, agents, prompts, MCP servers and hooks in a git repository. Spellbook installs them into Claude Code, GitHub Copilot, Cursor, Codex and Gemini CLI, and keeps everyone up to date.</p>
       <div class="actions">
         <a class="btn primary" href="#install">Install</a>
         <a class="btn ghost" href="https://github.com/graemer-org/spellbook#readme">Read the docs</a>
@@ -324,7 +334,7 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
       </div>
       <div class="step">
         <h3>Subscribe</h3>
-        <p><code>spellbook registry add</code> fetches the repository and writes every resource in the format Claude Code and Copilot each expect.</p>
+        <p><code>spellbook registry add</code> fetches the repository and writes every resource in the format each of your tools expects.</p>
       </div>
       <div class="step">
         <h3>Stay in sync</h3>
@@ -338,17 +348,36 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
   <div class="wrap">
     <div class="section-head">
       <p class="eyebrow">What it syncs</p>
-      <h2>Six kinds of spells, two tools</h2>
+      <h2>Six kinds of spells, five tools</h2>
       <p class="lede">Each one is written once and translated per tool: file locations, frontmatter, even the model an agent uses.</p>
     </div>
     <div class="kinds">
-      <div class="kind"><span class="glyph-box">{ }</span><h3>Skills</h3><p>Instructions and scripts the agent loads when a task calls for them.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
-      <div class="kind"><span class="glyph-box">#</span><h3>Instructions</h3><p>Standing guidance, always on or limited to certain files. Layered from company to team.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
-      <div class="kind"><span class="glyph-box">@</span><h3>Agents</h3><p>Specialists with their own prompt, tools and model, with per-tool settings where they differ.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
-      <div class="kind"><span class="glyph-box">&gt;_</span><h3>Prompts</h3><p>Reusable tasks you start yourself, such as drafting release notes.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot, in projects</span></div></div>
-      <div class="kind"><span class="glyph-box">⇄</span><h3>MCP servers</h3><p>Connections to external tools and data. Installed only after you allow the registry to.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
-      <div class="kind"><span class="glyph-box">!</span><h3>Hooks</h3><p>Commands that run when something happens in a session. Also behind your permission.</p><div class="tools"><span class="pill ok">Claude Code</span><span class="pill ok">Copilot</span></div></div>
+      <div class="kind"><span class="glyph-box">{ }</span><h3>Skills</h3><p>Instructions and scripts the agent loads when a task calls for them.</p></div>
+      <div class="kind"><span class="glyph-box">#</span><h3>Instructions</h3><p>Standing guidance, always on or limited to certain files. Layered from company to team.</p></div>
+      <div class="kind"><span class="glyph-box">@</span><h3>Agents</h3><p>Specialists with their own prompt, tools and model, with per-tool settings where they differ.</p></div>
+      <div class="kind"><span class="glyph-box">&gt;_</span><h3>Prompts</h3><p>Reusable tasks you start yourself, such as drafting release notes.</p></div>
+      <div class="kind"><span class="glyph-box">⇄</span><h3>MCP servers</h3><p>Connections to external tools and data. Installed only after you allow the registry to.</p></div>
+      <div class="kind"><span class="glyph-box">!</span><h3>Hooks</h3><p>Commands that run when something happens in a session. Also behind your permission.</p></div>
     </div>
+
+    <div class="support" role="region" aria-label="Support by tool" tabindex="0">
+      <table>
+        <thead>
+          <tr><th scope="col"></th><th scope="col">Claude Code</th><th scope="col">GitHub Copilot</th><th scope="col">Cursor</th><th scope="col">Codex</th><th scope="col">Gemini CLI</th></tr>
+        </thead>
+        <tbody>
+          <tr><th scope="row">Skills</th><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><th scope="row">Instructions, always on</th><td class="y">✓</td><td class="y">✓</td><td>in projects</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><th scope="row">Instructions for certain files</th><td class="y">✓</td><td class="y">✓</td><td>in projects</td><td class="n">–</td><td class="n">–</td></tr>
+          <tr><th scope="row">Agents</th><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><th scope="row">Prompts</th><td class="y">✓</td><td>in projects</td><td class="y">✓</td><td class="n">–</td><td class="y">✓</td></tr>
+          <tr><th scope="row">MCP servers</th><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+          <tr><th scope="row">Hooks</th><td class="y">✓</td><td class="y">✓</td><td>when named</td><td class="y">✓</td><td>when named</td></tr>
+          <tr><th scope="row">Automatic sync</th><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td><td class="y">✓</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">What a tool has no place for is skipped, and the sync says how many. Cursor support is new and not yet checked against Cursor's documentation. The <a href="https://github.com/graemer-org/spellbook#notes-on-each-tool">notes on each tool</a> have the details.</p>
   </div>
 </section>
 
@@ -368,7 +397,7 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
     <div class="panel" role="tabpanel" id="panel-you" aria-labelledby="tab-you">
       <div>
         <h3>The same spells on every machine</h3>
-        <p>Subscribe to public collections, keep your own in a private repository, and let both tools pick up changes on their own.</p>
+        <p>Subscribe to public collections, keep your own in a private repository, and let your tools pick up changes on their own.</p>
         <ul>
           <li><strong>Pick what you want</strong> from any repository with <code>--skill</code>.</li>
           <li><strong>Start your own registry</strong> with <code>registry setup</code>.</li>

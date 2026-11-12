@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/spellbook.svg" alt="Spellbook: shared spells for Claude Code and GitHub Copilot" width="760">
+  <img src="assets/spellbook.svg" alt="Spellbook: shared spells for your AI coding agents" width="760">
 </p>
 
 <p align="center">
@@ -16,12 +16,12 @@
 </p>
 
 Spellbook keeps your team's AI tooling in git and installs it into Claude
-Code and GitHub Copilot.
+Code, GitHub Copilot, Cursor, Codex and Gemini CLI.
 
 Write a skill, an instruction, an agent, a prompt, an MCP server or a hook
-once, in a git repository. Everyone who subscribes gets it in both tools,
-and `spellbook sync` brings every later change: new things are installed,
-changed things updated, deleted things removed.
+once, in a git repository. Everyone who subscribes gets it in the tools they
+use, and `spellbook sync` brings every later change: new things are
+installed, changed things updated, deleted things removed.
 
 ```sh
 brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
@@ -34,17 +34,20 @@ spellbook autosync enable
 
 ## What it syncs
 
-| | What it is | Claude Code | GitHub Copilot |
-|---|---|:-:|:-:|
-| Skills | Instructions and scripts the agent loads when a task calls for them | ✓ | ✓ |
-| Instructions | Standing guidance, always on or limited to certain files | ✓ | ✓ |
-| Agents | Specialists with their own prompt, tools and model | ✓ | ✓ |
-| Prompts | Reusable tasks you start yourself | ✓ | in projects |
-| MCP servers | Connections to external tools and data | ✓ | ✓ |
-| Hooks | Commands that run when something happens in a session | ✓ | ✓ |
+| | Claude Code | GitHub Copilot | Cursor | Codex | Gemini CLI |
+|---|:-:|:-:|:-:|:-:|:-:|
+| Skills | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Instructions, always on | ✓ | ✓ | in projects | ✓ | ✓ |
+| Instructions for certain files | ✓ | ✓ | in projects | – | – |
+| Agents | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Prompts | ✓ | in projects | ✓ | – | ✓ |
+| MCP servers | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Hooks | ✓ | ✓ | when named | ✓ | when named |
+| Automatic sync | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-Each one is written once in the registry and rendered in the format each
-tool expects.
+Each resource is written once in the registry and rendered in the format
+each tool expects. What a tool has no place for is skipped, and the sync
+says how many. [Notes on each tool](#notes-on-each-tool) has the details.
 
 ## Contents
 
@@ -81,7 +84,8 @@ Spellbook needs `git` on the `PATH`.
 You want the same skills and habits on every machine and in every project.
 
 **1. Set up.** This creates `~/.config/spellbook/config.toml` and enables
-both tools.
+the tools it finds installed. Name them yourself with `--target`, for
+example `spellbook init --target claude --target cursor`.
 
 ```sh
 spellbook init
@@ -366,7 +370,8 @@ That gives company guidance, then team guidance, in a stable order.
 An agent is a Markdown file whose frontmatter needs a `description`.
 Spellbook passes the frontmatter on as you wrote it, so every field a tool
 understands works. Fields under `claude:` or `copilot:` go to that tool
-only, which is how you give each one its own model:
+only, which is how you give each one its own model. `cursor:`, `codex:` and
+`gemini:` work the same way:
 
 ```markdown
 ---
@@ -452,10 +457,11 @@ after `spellbook registry allow acme hooks`.
 - `event` is one of `SessionStart`, `SessionEnd`, `UserPromptSubmit`,
   `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SubagentStop`,
   `PreCompact` and `Notification`. These are Claude Code's names. Copilot
-  accepts them too and then uses the same matcher rules and the same input
-  format, so one hook serves both tools.
+  and Codex accept the same form, so one hook serves all three. Cursor and
+  Gemini CLI get a hook only when it names them; see
+  [Notes on each tool](#notes-on-each-tool).
 - `matcher`, `timeout` (seconds) and `tools` are optional. `tools` limits a
-  hook to `["claude"]` or `["copilot"]`.
+  hook to the named tools, for example `["cursor"]`.
 - A hook that needs a script is a directory: `hooks/format/hook.json` next
   to its files. Spellbook installs the files and replaces `${HOOK_DIR}` in
   the command with where they are:
@@ -583,6 +589,83 @@ for example `--ref=` or `--skill=`.
 | GitHub Copilot hooks | `~/.copilot/hooks/spellbook-hooks.json` | `.github/hooks/spellbook-hooks.json` |
 | Lock file | `~/.config/spellbook/spellbook.lock` | `spellbook.lock` |
 | State | `~/.config/spellbook/state.json` | `.spellbook/state.json` |
+
+Cursor:
+
+| | Home | Project |
+|---|---|---|
+| Skills, and prompts as skills | `~/.cursor/skills/` | `.cursor/skills/` |
+| Instructions | not supported: user rules live in Cursor's settings | `.cursor/rules/<name>.mdc` |
+| Agents | `~/.cursor/agents/` | `.cursor/agents/` |
+| MCP servers | `~/.cursor/mcp.json` | `.cursor/mcp.json` |
+| Hooks | `~/.cursor/hooks.json` | `.cursor/hooks.json` |
+
+Codex:
+
+| | Home | Project |
+|---|---|---|
+| Skills | `~/.agents/skills/` | `.agents/skills/` |
+| Instructions | a marked block in `~/.codex/AGENTS.md` | a marked block in `AGENTS.md` |
+| Agents | `~/.codex/agents/<name>.toml` | `.codex/agents/<name>.toml` |
+| MCP servers | `[mcp_servers.<name>]` in `~/.codex/config.toml` | the same in `.codex/config.toml` |
+| Hooks | `~/.codex/hooks.json` | `.codex/hooks.json` |
+
+Gemini CLI:
+
+| | Home | Project |
+|---|---|---|
+| Skills | `~/.gemini/skills/` | `.gemini/skills/` |
+| Instructions | a marked block in `~/.gemini/GEMINI.md` | a marked block in `GEMINI.md` |
+| Agents | `~/.gemini/agents/` | `.gemini/agents/` |
+| Prompts | `~/.gemini/commands/<name>.toml` | `.gemini/commands/<name>.toml` |
+| MCP servers and hooks | `~/.gemini/settings.json` | `.gemini/settings.json` |
+
+### Notes on each tool
+
+How well each tool's formats were checked differs, so it is stated here.
+
+**Claude Code and GitHub Copilot** were checked against their
+documentation, and Claude Code also in real sessions.
+
+**Codex** was checked against the source of `openai/codex`, not its
+documentation site.
+
+- Codex reads `.codex/` in a project only after you marked the project as
+  trusted, and runs a new or changed hook only after you approved it. That
+  includes the hook of `spellbook autosync enable`.
+- An agent file may only hold keys Codex knows, so only `description`, the
+  text and the fields under `codex:` are written.
+- Codex does not expand `${NAME}` in an MCP server definition. Spellbook
+  translates the common forms (`env`, a bearer token, a header that is one
+  variable). For anything else add a `codex` object to the definition.
+- No instructions for certain files, no prompts, and no `PostToolUseFailure`
+  or `Notification` hooks.
+
+**Gemini CLI** was checked against the documentation in its repository.
+
+- A prompt becomes a custom command, `/<name>`; `$ARGUMENTS` is written as
+  `{{args}}`.
+- An MCP server with `"type": "http"` is written with `httpUrl`.
+- The automatic sync is a hook the session waits for, at most once per
+  interval.
+- A `settings.json` with comments is not valid JSON; Spellbook leaves it
+  alone and the sync stops with an error.
+- No instructions for certain files.
+
+**Cursor** support is new and **not yet checked against Cursor's
+documentation**, which was not reachable when it was written. Treat it as
+experimental and please report what does not match.
+
+- At home level there are no instruction files, because Cursor keeps user
+  rules in its settings.
+- Cursor also reads `.claude/skills` and `.claude/agents`, so with both
+  tools enabled the same skill or agent is present twice.
+
+**Hooks in Cursor and Gemini CLI.** Both name their tools differently
+(`Shell` or `run_shell_command`, not `Bash`) and hand a hook different
+input. A hook written for Claude Code would be installed there and then
+never match. They therefore get a hook only when its `"tools"` list names
+them. Write the event with Claude Code's name; it is translated.
 
 ### Reviewing and pinning updates
 
