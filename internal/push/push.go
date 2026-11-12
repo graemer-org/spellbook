@@ -36,7 +36,7 @@ const (
 )
 
 // Kinds lists the kinds that can be pushed.
-var Kinds = []string{KindSkill, KindInstruction, KindAgent, KindPrompt}
+var Kinds = []string{KindSkill, KindInstruction, KindAgent, KindPrompt, KindMCP}
 
 // Candidate is a resource found in the place where a tool reads it.
 type Candidate struct {
@@ -51,6 +51,19 @@ type Candidate struct {
 	// Hash is the recorded hash of a managed resource, and StateKind the
 	// kind it is recorded as.
 	Hash, StateKind string
+	// entry is the definition of an MCP server, and base the hash of the
+	// registry's version of it as this tool stores it.
+	entry []byte
+	base  string
+}
+
+// Current returns the hash of the resource as it is now.
+func (c Candidate) Current() string {
+	if c.Kind == KindMCP {
+		return entryHash(c.entry)
+	}
+	h, _ := syncer.HashPath(c.Path)
+	return h
 }
 
 // stateKind maps a kind to the kind recorded in the state file.
@@ -67,11 +80,18 @@ func (c Candidate) stateKind() string {
 }
 
 // PendingItem is what MarkPending needs to know about the candidate.
-func (c Candidate) PendingItem(reg string) syncer.PendingItem {
+func (c Candidate) PendingItem(loc config.Location, reg string) syncer.PendingItem {
 	p := syncer.PendingItem{Abs: c.Path, Kind: c.stateKind(), Name: c.Name, Target: c.Target, Registry: reg}
 	if c.Managed && !c.Pending {
 		// The registry's version it was changed from.
 		p.Base = c.Hash
+	}
+	if c.Kind == KindMCP {
+		file := strings.TrimSuffix(c.Path, "#"+c.Name)
+		p.Abs, p.Kind, p.Key, p.Hash = file, c.StateKind, syncer.StateKey(loc, file)+"#"+c.Name, entryHash(c.entry)
+		if c.Managed && !c.Pending {
+			p.Base = c.base
+		}
 	}
 	return p
 }
@@ -143,6 +163,7 @@ func Candidates(loc config.Location, cfg *config.Config) ([]Candidate, error) {
 			files(KindPrompt, tool, place.Path)
 		}
 	}
+	mcpCandidates(loc, cfg, recorded, func(c Candidate) { out = append(out, c) })
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
 		if a.Kind != b.Kind {
@@ -176,7 +197,7 @@ type Item struct {
 
 // Select picks the candidates the arguments name. An argument is a path,
 // or a kind followed by a name. from limits the choice to one tool.
-func Select(all []Candidate, args []string, from string) ([]Item, error) {
+func Select(all []Candidate, args []string, from string, plain []string) ([]Item, error) {
 	var items []Item
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -207,7 +228,7 @@ func Select(all []Candidate, args []string, from string) ([]Item, error) {
 				if _, err := os.Stat(abs); err != nil {
 					return nil, fmt.Errorf("%s does not exist", arg)
 				}
-				return nil, fmt.Errorf("%s is not in a place where an enabled tool reads skills, instructions, agents or prompts; run 'spellbook push' without arguments to see what can be pushed", arg)
+				return nil, fmt.Errorf("%s is not in a place where an enabled tool reads skills, instructions, agents or prompts; run 'spellbook push' without arguments to see what can be pushed (an MCP server is named as 'mcp <name>')", arg)
 			}
 		}
 		if len(matches) == 0 {
@@ -217,10 +238,8 @@ func Select(all []Candidate, args []string, from string) ([]Item, error) {
 		// the copies that differ from the registry's version matter.
 		var changed []Candidate
 		for _, c := range matches {
-			if c.Managed && !c.Pending {
-				if now, err := syncer.HashPath(c.Path); err == nil && now == c.Hash {
-					continue
-				}
+			if c.Managed && !c.Pending && c.Current() == c.Hash {
+				continue
 			}
 			changed = append(changed, c)
 		}
@@ -229,10 +248,16 @@ func Select(all []Candidate, args []string, from string) ([]Item, error) {
 		}
 		var built []Item
 		for _, c := range changed {
-			if c.Managed && !c.Pending && c.StateKind != c.stateKind() {
+			if c.Kind != KindMCP && c.Managed && !c.Pending && c.StateKind != c.stateKind() {
 				return nil, fmt.Errorf("%s was installed from a %s in registry %s; pushing changes to it is not supported yet", what, c.StateKind, c.Registry)
 			}
-			it, err := build(c)
+			var it Item
+			var err error
+			if c.Kind == KindMCP {
+				it, err = buildMCP(c, plain)
+			} else {
+				it, err = build(c)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("%s (%s): %w", what, c.Path, err)
 			}
@@ -481,6 +506,8 @@ func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
 		return ""
 	}
 	switch it.Kind {
+	case KindMCP:
+		return reconcileMCP(snap, it)
 	case KindSkill:
 		var orig registry.Skill
 		name := pick(func(n string) bool {

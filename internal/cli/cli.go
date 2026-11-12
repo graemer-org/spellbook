@@ -1193,15 +1193,19 @@ func newDoctor(locate func() (config.Location, error)) *cobra.Command {
 
 func newPush(locate func() (config.Location, error)) *cobra.Command {
 	var to, from, group, branch, message, into string
+	var plain []string
 	var dryRun, yes bool
 	cmd := &cobra.Command{
 		Use:   "push [<path> | <kind> <name>]...",
 		Short: "Propose something you created locally to a registry",
-		Long: "Take a skill, instruction, agent or prompt that you created or changed where\n" +
-			"one of your tools reads it, turn it into the form a registry holds, and push\n" +
-			"it to the registry on a new branch. You get the link to open a pull request.\n\n" +
-			"Name what to push by its path, or by its kind and name. Without arguments,\n" +
-			"push lists what it finds.",
+		Long: "Take a skill, instruction, agent, prompt or MCP server that you created or\n" +
+			"changed where one of your tools reads it, turn it into the form a registry\n" +
+			"holds, and push it to the registry on a new branch. You get the link to open\n" +
+			"a pull request.\n\n" +
+			"Name what to push by its path, or by its kind and name (an MCP server always\n" +
+			"as 'mcp <name>'). Without arguments, push lists what it finds.\n\n" +
+			"An MCP server whose definition holds a secret written out is refused; push\n" +
+			"says which value it is and how to refer to an environment variable instead.",
 		Example: "  spellbook push                                   # what could be pushed\n" +
 			"  spellbook push .claude/skills/db-migration --to acme\n" +
 			"  spellbook push agent reviewer --to acme --group platform\n" +
@@ -1226,8 +1230,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 				for _, c := range all {
 					edited := false
 					if c.Managed && !c.Pending {
-						now, err := syncer.HashPath(c.Path)
-						if err != nil || now == c.Hash {
+						if c.Current() == c.Hash {
 							continue
 						}
 						edited = true
@@ -1246,7 +1249,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", c.Kind, c.Name, c.Target, status, c.Path)
 				}
 				if n == 0 {
-					fmt.Fprintln(out, "Nothing to push: every skill, instruction, agent and prompt your tools have is as it came from a registry.")
+					fmt.Fprintln(out, "Nothing to push: everything your tools have is as it came from a registry.")
 					return nil
 				}
 				if err := w.Flush(); err != nil {
@@ -1269,7 +1272,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 			if from != "" && !target.Known(from) {
 				return fmt.Errorf("unknown tool %q for --from (supported: %s)", from, strings.Join(target.Names(), ", "))
 			}
-			items, err := push.Select(all, args, from)
+			items, err := push.Select(all, args, from, plain)
 			if err != nil {
 				return err
 			}
@@ -1391,7 +1394,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 
 			var pending []syncer.PendingItem
 			for _, it := range items {
-				pending = append(pending, it.PendingItem(reg.Name))
+				pending = append(pending, it.PendingItem(loc, reg.Name))
 			}
 			if err := syncer.MarkPending(loc, pending); err != nil {
 				return err
@@ -1408,6 +1411,7 @@ func newPush(locate func() (config.Location, error)) *cobra.Command {
 	cmd.Flags().StringVar(&into, "into", "", "write into this local clone of the registry instead of pushing a branch")
 	cmd.Flags().BoolVarP(&dryRun, "dry-run", "n", false, "show what would be sent without sending it")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "do not ask before pushing")
+	cmd.Flags().StringSliceVar(&plain, "plain", nil, "for an MCP server: a key in env or headers whose value is no secret; repeatable")
 	return cmd
 }
 

@@ -176,6 +176,12 @@ func (r *run) applyMCP(ctx context.Context, want map[target.MCPPlace][]mcpWant) 
 				asked = prev.Hash
 			}
 			switch {
+			case exists && managed && prev.Pending && prev.Base == source && !r.opts.Force:
+				// A pushed local change, while the registry still offers
+				// the version it was made from.
+				c.Unchanged++
+				r.entries = append(r.entries, prev)
+				continue
 			case exists && !managed && onDisk == source:
 				// Identical to what would be written: take it over.
 				c.Unchanged++
@@ -223,6 +229,10 @@ func (r *run) applyMCP(ctx context.Context, want map[target.MCPPlace][]mcpWant) 
 				r.entries = append(r.entries, e)
 			case !exists:
 				// Already gone.
+			case e.Pending:
+				// Pushed to the registry, which does not offer it yet, or
+				// may not install it here.
+				r.entries = append(r.entries, e)
 			case onDisk != e.Hash && !r.opts.Force:
 				r.counts(e.Target).Skipped++
 				r.warnf("%s: kept MCP server %q: it was edited in %s (use --force to remove)", e.Target, e.Name, place.File)

@@ -14,7 +14,18 @@ type PendingItem struct {
 	// Base is the recorded hash of the registry's version, when the
 	// resource came from the registry and was changed locally.
 	Base string
+	// Key and Hash are set for a resource that is an entry inside a file,
+	// such as an MCP server: the state path "<file>#<name>" and the hash
+	// of the entry. Abs is then the file.
+	Key, Hash string
 }
+
+// HashBytes returns the content hash the state file records for an entry.
+func HashBytes(b []byte) string { return hashBytes(b) }
+
+// StateKey returns the path the state file records for a file or
+// directory.
+func StateKey(loc config.Location, abs string) string { return pathKey(loc.Root, abs) }
 
 // HashPath returns the content hash the state file records for a file or
 // directory.
@@ -32,11 +43,14 @@ func MarkPending(loc config.Location, items []PendingItem) error {
 	}
 	byPath := st.ByPath()
 	for _, it := range items {
-		hash, err := hashPath(it.Abs)
-		if err != nil {
-			return err
+		hash, key := it.Hash, it.Key
+		if key == "" {
+			var err error
+			if hash, err = hashPath(it.Abs); err != nil {
+				return err
+			}
+			key = pathKey(loc.Root, it.Abs)
 		}
-		key := pathKey(loc.Root, it.Abs)
 		byPath[key] = state.Entry{Path: key, Kind: it.Kind, Name: it.Name, Target: it.Target, Registry: it.Registry, Hash: hash, Pending: true, Base: it.Base}
 	}
 	st.Entries = st.Entries[:0]

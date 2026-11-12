@@ -23,6 +23,9 @@ type MCPServer struct {
 	Name string
 	// Raw is the JSON object as written in the registry.
 	Raw json.RawMessage
+	// File is where the definition lives, relative to the registry root.
+	// It is empty for a server listed in a shared file at the root.
+	File string
 }
 
 // Hash identifies the definition.
@@ -43,7 +46,7 @@ func DiscoverMCP(root string) ([]MCPServer, []string, error) {
 	var out []MCPServer
 	var warnings []string
 	seen := map[string]bool{}
-	add := func(rel, name string, data []byte) {
+	add := func(rel, name string, data []byte, own bool) {
 		if !config.ValidResourceName(name) {
 			warnings = append(warnings, fmt.Sprintf("skipped %s: %q is not a valid server name", rel, name))
 			return
@@ -63,7 +66,11 @@ func DiscoverMCP(root string) ([]MCPServer, []string, error) {
 			}
 		}
 		seen[name] = true
-		out = append(out, MCPServer{Name: name, Raw: data})
+		srv := MCPServer{Name: name, Raw: data}
+		if own {
+			srv.File = rel
+		}
+		out = append(out, srv)
 	}
 
 	dir := filepath.Join(root, MCPDir)
@@ -79,7 +86,7 @@ func DiscoverMCP(root string) ([]MCPServer, []string, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		add(MCPDir+"/"+e.Name(), strings.TrimSuffix(e.Name(), ".json"), data)
+		add(MCPDir+"/"+e.Name(), strings.TrimSuffix(e.Name(), ".json"), data, true)
 	}
 	for _, file := range rootMCPFiles {
 		data, err := os.ReadFile(filepath.Join(root, file))
@@ -97,7 +104,7 @@ func DiscoverMCP(root string) ([]MCPServer, []string, error) {
 			continue
 		}
 		for name, raw := range doc.Servers {
-			add(file+" ("+name+")", name, raw)
+			add(file+" ("+name+")", name, raw, false)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

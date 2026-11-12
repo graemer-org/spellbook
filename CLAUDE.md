@@ -106,9 +106,10 @@ go vet ./... && gofmt -l .    # must be clean before committing
   that is not valid JSON is not touched.
 - **`push` proposes, it never publishes.** It pushes a new branch and never
   touches the registry's default branch. It shows what it will send and
-  asks first, unless `--yes` is given. Anything with secrets (MCP server
-  definitions, when they are added) must be refused when a value is not a
-  `${VAR}` reference, with an instruction how to fix it.
+  asks first, unless `--yes` is given. An MCP server definition with a
+  value in `env` or `headers` that is not a `${VAR}` reference is refused,
+  with the exact replacement to write; `--plain KEY` is the only way to
+  let a literal through. Hooks, when they are added, need the same care.
 - **A pushed resource is pending.** It is recorded in the state with
   `pending`, is never pruned while the registry does not offer it, and is
   replaced by the registry's version once it does, unless it was edited.

@@ -409,3 +409,79 @@ func TestPushFromCursorCodexAndGemini(t *testing.T) {
 		}
 	}
 }
+
+func TestPushMCPServerRefusesSecretsAndSaysHowToFixThem(t *testing.T) {
+	e, repo, project := pushEnv(t, "")
+	mcp := filepath.Join(project, ".mcp.json")
+	write(t, mcp, `{
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp?api_key=abc123",
+      "headers": {"Authorization": "Bearer sk-live-123", "X-Team": "platform"}
+    },
+    "tracker": {
+      "command": "npx",
+      "args": ["-y", "@acme/tracker", "--token", "t0p-secret"],
+      "env": {"TRACKER_TOKEN": "t0p-secret", "LOG_LEVEL": "debug"}
+    }
+  }
+}
+`)
+	code, out := e.run("push", "mcp", "docs", "-p", "--yes")
+	if code == 0 {
+		t.Fatalf("a definition with secrets must be refused:\n%s", out)
+	}
+	for _, want := range []string{`"Authorization": "Bearer ${API_TOKEN}"`, "headers.X-Team is written out", "--plain X-Team", "url carries api_key", "push again"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("the refusal should explain the fix, missing %q:\n%s", want, out)
+		}
+	}
+	code, out = e.run("push", "mcp", "tracker", "-p", "--yes")
+	if code == 0 || !strings.Contains(out, `"TRACKER_TOKEN": "${TRACKER_TOKEN}"`) || !strings.Contains(out, "the value after --token is written out") || !strings.Contains(out, "env.LOG_LEVEL") {
+		t.Errorf("env values and flag values should be named:\n%s", out)
+	}
+	if b, _ := exec.Command("git", "-C", repo, "branch", "--list", "spellbook/*").Output(); strings.TrimSpace(string(b)) != "" {
+		t.Fatalf("a refused push created a branch: %s", b)
+	}
+
+	// Fixed as instructed.
+	write(t, mcp, `{
+  "mcpServers": {
+    "docs": {
+      "type": "http",
+      "url": "https://mcp.example.com/mcp",
+      "headers": {"Authorization": "Bearer ${API_TOKEN}", "X-Team": "platform"}
+    },
+    "tracker": {
+      "command": "npx",
+      "args": ["-y", "@acme/tracker", "--token", "${TRACKER_TOKEN}"],
+      "env": {"TRACKER_TOKEN": "${TRACKER_TOKEN}", "LOG_LEVEL": "debug"}
+    }
+  }
+}
+`)
+	out = e.mustRun("push", "mcp", "docs", "mcp", "tracker", "-p", "--yes", "--plain", "X-Team", "--plain", "LOG_LEVEL", "--branch", "b")
+	if !strings.Contains(out, "registry allow") {
+		t.Errorf("the user should be reminded that MCP servers need permission:\n%s", out)
+	}
+	docs := show(t, repo, "b", "mcp/docs.json")
+	if !strings.Contains(docs, "Bearer ${API_TOKEN}") || !strings.Contains(docs, `"X-Team": "platform"`) {
+		t.Errorf("the pushed definition is wrong:\n%s", docs)
+	}
+
+	// The servers stay where they are, before and after the merge.
+	e.mustRun("sync", "-p")
+	if got := read(t, mcp); !strings.Contains(got, `"tracker"`) || !strings.Contains(got, `"docs"`) {
+		t.Fatalf("a sync removed pushed servers:\n%s", got)
+	}
+	e.git(repo, "merge", "--quiet", "b")
+	e.mustRun("registry", "allow", "acme", "mcp", "-p")
+	out = e.mustRun("sync", "-p")
+	if strings.Contains(out, "does not manage") || !strings.Contains(read(t, mcp), `"tracker"`) {
+		t.Errorf("after the merge the servers should be the registry's, without complaints:\n%s", out)
+	}
+	if !exists(filepath.Join(project, ".github", "mcp.json")) {
+		t.Error("after the merge the other tool should get the servers too")
+	}
+}

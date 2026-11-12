@@ -321,7 +321,8 @@ is reviewed like any other.
 - **It works out what you are pushing** from where the file lies: a skill,
   an instruction, an agent or a prompt, in the form of any of the five
   tools, including Cursor's `.mdc` rules, Codex's TOML agents and Gemini
-  CLI's TOML commands. MCP servers and hooks are not supported yet.
+  CLI's TOML commands. An MCP server is named as `mcp <name>`, because it
+  is an entry in a configuration file. Hooks are not supported yet.
 - **It turns the tool's form into the registry's.** Copilot's `applyTo`
   becomes `paths`. Fields only one tool understands, such as an agent's
   `model`, move under that tool's name, and push tells you so.
@@ -339,6 +340,19 @@ is reviewed like any other.
   registry's `registry.toml`. Without it, push reminds you that people who
   use groups will not get it until it is in one.
 - **Several at once** go into one branch: `spellbook push a.md b.md`.
+- **MCP servers and secrets.** `spellbook push mcp docs` takes the server
+  from your tool's configuration. A definition with a secret written out is
+  refused, and push says which value it is and what to write instead:
+
+  ```
+  env.TRACKER_TOKEN is written out. Write "TRACKER_TOKEN": "${TRACKER_TOKEN}"
+  and set that variable in your environment. If the value is no secret,
+  pass --plain TRACKER_TOKEN
+  ```
+
+  It checks the values in `env` and `headers`, values after flags such as
+  `--token`, and credentials in the URL. Servers in Codex's `config.toml`
+  are not read yet.
 
 | Flag | Meaning |
 |---|---|
@@ -349,6 +363,7 @@ is reviewed like any other.
 | `--dry-run` | show what would be sent |
 | `--into ~/code/ai-registry` | write into your local clone instead of pushing |
 | `--yes` | do not ask |
+| `--plain LOG_LEVEL` | for an MCP server: this value is no secret |
 
 Changes to an always-on instruction for Copilot, which lives in a block of
 `copilot-instructions.md`, cannot be pushed yet. Edit the instruction's
