@@ -16,6 +16,9 @@ import (
 // ProjectFile is the name of the configuration file in a project root.
 const ProjectFile = "spellbook.toml"
 
+// LockFile is the name of the file that pins each registry to a commit.
+const LockFile = "spellbook.lock"
+
 // Scope says which set of directories a sync writes to.
 type Scope string
 
@@ -32,6 +35,7 @@ type Location struct {
 	Root       string
 	ConfigPath string
 	StatePath  string
+	LockPath   string
 }
 
 // Target holds the per-agent settings.
@@ -52,9 +56,22 @@ type Registry struct {
 	Path string `toml:"path,omitempty"`
 	// Priority decides name collisions: the higher number wins.
 	Priority int `toml:"priority,omitzero"`
+	// Groups selects groups from the registry's manifest. Empty means the
+	// registry's default groups, or everything when it defines none.
+	Groups []string `toml:"groups,omitempty"`
 	// Skills limits the registry to the named skills. Empty means all.
 	Skills []string `toml:"skills,omitempty"`
+	// Prefix puts the registry name in front of installed names:
+	// PrefixAll always, PrefixCollisions only when the plain name is taken.
+	Prefix string `toml:"prefix,omitempty"`
 }
+
+// Values of Registry.Prefix.
+const (
+	PrefixNone       = ""
+	PrefixAll        = "all"
+	PrefixCollisions = "collisions"
+)
 
 // Config is the content of a config.toml or spellbook.toml file.
 type Config struct {
@@ -88,6 +105,7 @@ func HomeLocation() (Location, error) {
 		Root:       home,
 		ConfigPath: filepath.Join(dir, "config.toml"),
 		StatePath:  filepath.Join(dir, "state.json"),
+		LockPath:   filepath.Join(dir, LockFile),
 	}, nil
 }
 
@@ -103,6 +121,7 @@ func ProjectLocationAt(dir string) (Location, error) {
 		Root:       abs,
 		ConfigPath: filepath.Join(abs, ProjectFile),
 		StatePath:  filepath.Join(abs, ".spellbook", "state.json"),
+		LockPath:   filepath.Join(abs, LockFile),
 	}, nil
 }
 
@@ -195,6 +214,11 @@ func (c *Config) Validate() error {
 		seen[r.Name] = true
 		if r.URL == "" {
 			return fmt.Errorf("registry %q has no url", r.Name)
+		}
+		switch r.Prefix {
+		case PrefixNone, PrefixAll, PrefixCollisions:
+		default:
+			return fmt.Errorf("registry %q: prefix must be %q or %q, not %q", r.Name, PrefixAll, PrefixCollisions, r.Prefix)
 		}
 		if r.Path != "" && !filepath.IsLocal(filepath.FromSlash(r.Path)) {
 			return fmt.Errorf("registry %q: path %q must stay inside the repository", r.Name, r.Path)

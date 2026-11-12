@@ -32,6 +32,15 @@ type Skill struct {
 type Snapshot struct {
 	Registry config.Registry
 	Commit   string
+	// Dir is the checkout directory, the root of the git repository.
+	Dir string
+	// Manifest is nil when the registry has no registry.toml.
+	Manifest *Manifest
+	// Groups are the groups the selection is based on: the configured ones,
+	// or the registry's default groups. Empty means no group filter.
+	Groups []string
+	// All holds every skill of the registry, Skills the selected ones.
+	All      []Skill
 	Skills   []Skill
 	Warnings []string
 }
@@ -78,17 +87,51 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			return nil, fmt.Errorf("path %q does not exist in the repository", r.Path)
 		}
 	}
-	skills, warnings, err := Discover(root)
+	all, warnings, err := Discover(root)
 	if err != nil {
 		return nil, err
 	}
-	if len(r.Skills) > 0 {
-		skills, warnings = filter(skills, r.Skills, warnings)
+	manifest, mwarn, err := LoadManifest(root)
+	if err != nil {
+		return nil, err
 	}
-	return &Snapshot{Registry: r, Commit: commit, Skills: skills, Warnings: warnings}, nil
+	warnings = append(warnings, mwarn...)
+	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all}
+	snap.Skills, snap.Groups, warnings, err = selectSkills(all, manifest, r, warnings)
+	if err != nil {
+		return nil, err
+	}
+	snap.Warnings = warnings
+	return snap, nil
 }
 
-func filter(skills []Skill, want []string, warnings []string) ([]Skill, []string) {
+// selectSkills narrows the skills of a registry to what the subscriber
+// asked for: first by group, then by the explicit skill list.
+func selectSkills(all []Skill, m *Manifest, r config.Registry, warnings []string) ([]Skill, []string, []string, error) {
+	groups := r.Groups
+	if len(groups) > 0 && m == nil {
+		return nil, nil, nil, fmt.Errorf("groups are configured, but the registry has no %s", ManifestFile)
+	}
+	if len(groups) == 0 && m != nil {
+		groups = m.DefaultGroups
+	}
+	selected := all
+	if len(groups) > 0 {
+		names, err := m.Skills(groups)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		selected, warnings = pick(all, names, warnings, "a group lists skill %q, which is not in the registry")
+	}
+	if len(r.Skills) > 0 {
+		selected, warnings = pick(selected, r.Skills, warnings, "skill %q is configured but not offered by the registry or the selected groups")
+	}
+	return selected, groups, warnings, nil
+}
+
+// pick returns the skills with the wanted names and warns about names that
+// match nothing.
+func pick(skills []Skill, want []string, warnings []string, missing string) ([]Skill, []string) {
 	byName := map[string]Skill{}
 	for _, s := range skills {
 		byName[s.Name] = s
@@ -97,7 +140,7 @@ func filter(skills []Skill, want []string, warnings []string) ([]Skill, []string
 	for _, name := range want {
 		s, ok := byName[name]
 		if !ok {
-			warnings = append(warnings, fmt.Sprintf("skill %q is configured but not in the registry", name))
+			warnings = append(warnings, fmt.Sprintf(missing, name))
 			continue
 		}
 		out = append(out, s)
@@ -174,4 +217,29 @@ func frontmatterName(path string) string {
 		}
 	}
 	return ""
+}
+
+// RewriteName sets the name field in the frontmatter of the SKILL.md in dir.
+// A tool expects the name of a skill to match its directory, so a skill that
+// is installed under a prefixed name needs its frontmatter changed too.
+func RewriteName(dir, name string) error {
+	path := filepath.Join(dir, SkillFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return nil
+	}
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return nil
+		}
+		if strings.HasPrefix(lines[i], "name:") {
+			lines[i] = "name: " + name
+			return os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
+		}
+	}
+	return nil
 }

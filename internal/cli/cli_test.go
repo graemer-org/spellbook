@@ -330,3 +330,252 @@ func TestCopilotSkillsPathIsConfigurable(t *testing.T) {
 		t.Error("skill was left behind in the previous directory")
 	}
 }
+
+const teamManifest = `version = 1
+default_groups = ["base"]
+
+[groups.base]
+description = "Everyone"
+skills = ["review"]
+
+[groups.platform]
+include = ["base"]
+skills = ["terraform"]
+
+[groups.frontend]
+skills = ["a11y"]
+`
+
+// teamRepo is a registry with a manifest and one skill per group, plus one
+// skill that is in no group.
+func (e *env) teamRepo() string {
+	e.t.Helper()
+	repo := e.repo(map[string]string{"skills/review": "v1", "skills/terraform": "v1", "skills/a11y": "v1", "skills/loose": "v1"})
+	write(e.t, filepath.Join(repo, "registry.toml"), teamManifest)
+	e.commit(repo, "manifest")
+	return repo
+}
+
+func installed(t *testing.T, dir string) string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return ""
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return strings.Join(names, ",")
+}
+
+func TestGroupsSelectSkillsWithIncludesAndDefaults(t *testing.T) {
+	e := newEnv(t)
+	repo := e.teamRepo()
+	e.mustRun("init", "--target", "claude")
+	claude := filepath.Join(e.home, ".claude", "skills")
+
+	e.mustRun("registry", "add", "acme", repo)
+	if got := installed(t, claude); got != "review" {
+		t.Errorf("without a chosen group the default group applies: got %q, want review", got)
+	}
+
+	e.mustRun("group", "join", "acme", "frontend")
+	if got := installed(t, claude); got != "a11y,review" {
+		t.Errorf("joining a group must keep the default group: got %q, want a11y,review", got)
+	}
+
+	e.mustRun("group", "leave", "acme", "base", "frontend")
+	e.mustRun("group", "join", "acme", "platform")
+	if got := installed(t, claude); got != "review,terraform" {
+		t.Errorf("platform includes base: got %q, want review,terraform", got)
+	}
+
+	out := e.mustRun("group", "list", "acme")
+	for _, want := range []string{"platform", "yes", "frontend", "Everyone"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("group list misses %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestUnknownGroupIsRejectedAndChangesNothing(t *testing.T) {
+	e := newEnv(t)
+	repo := e.teamRepo()
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+
+	code, out := e.run("group", "join", "acme", "nope")
+	if code == 0 || !strings.Contains(out, `no group "nope"`) {
+		t.Errorf("joining an unknown group should fail clearly: exit %d\n%s", code, out)
+	}
+	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "review" {
+		t.Errorf("failed join changed the installed skills: %q", got)
+	}
+
+	plain := e.repo(map[string]string{"alpha": "v1"})
+	code, out = e.run("registry", "add", "plain", plain, "--group", "base")
+	if code == 0 || !strings.Contains(out, "registry.toml") {
+		t.Errorf("a group on a registry without manifest should fail clearly: exit %d\n%s", code, out)
+	}
+}
+
+func TestManifestWithIncludeCycleIsAnError(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	write(t, filepath.Join(repo, "registry.toml"), "version = 1\n[groups.a]\ninclude = [\"b\"]\n[groups.b]\ninclude = [\"a\"]\n")
+	e.commit(repo, "cycle")
+	e.mustRun("init", "--target", "claude")
+
+	code, out := e.run("registry", "add", "acme", repo)
+	if code == 0 || !strings.Contains(out, "cycle") {
+		t.Errorf("an include cycle should be reported: exit %d\n%s", code, out)
+	}
+}
+
+func TestPrefixAllRenamesDirectoryAndFrontmatter(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--prefix", "all")
+
+	skill := filepath.Join(e.home, ".claude", "skills", "acme-alpha", "SKILL.md")
+	if got := read(t, skill); !strings.Contains(got, "name: acme-alpha\n") {
+		t.Errorf("frontmatter name was not rewritten:\n%s", got)
+	}
+	// A second sync must see the rewritten copy as unchanged.
+	if out := e.mustRun("sync"); !strings.Contains(out, "0 installed, 0 updated, 1 unchanged") {
+		t.Errorf("prefixed skill is not stable across syncs:\n%s", out)
+	}
+}
+
+func TestPrefixCollisionsKeepsBothSkills(t *testing.T) {
+	e := newEnv(t)
+	first := e.repo(map[string]string{"shared": "from-first"})
+	second := e.repo(map[string]string{"shared": "from-second", "other": "x"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "first", first, "--priority", "10")
+	e.mustRun("registry", "add", "second", second, "--prefix", "collisions")
+
+	claude := filepath.Join(e.home, ".claude", "skills")
+	if got := installed(t, claude); got != "other,second-shared,shared" {
+		t.Fatalf("got %q, want other,second-shared,shared", got)
+	}
+	if got := read(t, filepath.Join(claude, "shared", "SKILL.md")); !strings.Contains(got, "from-first") {
+		t.Errorf("the plain name should belong to the higher priority registry: %q", got)
+	}
+	if got := read(t, filepath.Join(claude, "second-shared", "SKILL.md")); !strings.Contains(got, "from-second") || !strings.Contains(got, "name: second-shared") {
+		t.Errorf("the prefixed copy is wrong: %q", got)
+	}
+}
+
+func TestLockedSyncInstallsTheRecordedCommit(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+	lockFile := filepath.Join(project, "spellbook.lock")
+	locked := read(t, lockFile)
+	if !strings.Contains(locked, `name = "acme"`) || !strings.Contains(locked, "commit = ") {
+		t.Fatalf("lock file is incomplete:\n%s", locked)
+	}
+
+	e.writeSkills(repo, map[string]string{"alpha": "v2"})
+	e.commit(repo, "v2")
+
+	// A teammate with a fresh checkout: config and lock, nothing installed.
+	if err := os.RemoveAll(filepath.Join(project, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(project, ".spellbook")); err != nil {
+		t.Fatal(err)
+	}
+	e.mustRun("sync", "-p", "--locked")
+	skill := filepath.Join(project, ".claude", "skills", "alpha", "SKILL.md")
+	if got := read(t, skill); !strings.Contains(got, "v1") {
+		t.Errorf("--locked installed a newer commit than the lock records: %q", got)
+	}
+	if read(t, lockFile) != locked {
+		t.Error("--locked changed the lock file")
+	}
+
+	out := e.mustRun("sync", "-p")
+	if got := read(t, skill); !strings.Contains(got, "v2") {
+		t.Errorf("a plain sync should move to the newest commit: %q", got)
+	}
+	if !strings.Contains(out, "(was ") {
+		t.Errorf("sync should say which commit it moved from:\n%s", out)
+	}
+	if read(t, lockFile) == locked {
+		t.Error("a plain sync should update the lock file")
+	}
+}
+
+func TestLockedSyncFailsForARegistryThatIsNotLocked(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--no-sync")
+
+	code, out := e.run("sync", "--locked")
+	if code == 0 || !strings.Contains(out, "spellbook.lock") {
+		t.Errorf("--locked without a lock entry should fail clearly: exit %d\n%s", code, out)
+	}
+}
+
+func TestDiffShowsUpstreamChangesWithoutInstallingThem(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"alpha": "v1", "beta": "v1", "gamma": "v1"})
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	if out := e.mustRun("diff"); !strings.Contains(out, "up to date") {
+		t.Errorf("diff right after a sync should be up to date:\n%s", out)
+	}
+
+	e.writeSkills(repo, map[string]string{"alpha": "v2", "delta": "v1"})
+	if err := os.RemoveAll(filepath.Join(repo, "gamma")); err != nil {
+		t.Fatal(err)
+	}
+	e.commit(repo, "change")
+
+	out := e.mustRun("diff", "acme", "--patch")
+	for _, want := range []string{"+ delta", "~ alpha", "- gamma", "+v2"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diff misses %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "beta") {
+		t.Errorf("diff lists an unchanged skill:\n%s", out)
+	}
+	claude := filepath.Join(e.home, ".claude", "skills")
+	if got := read(t, filepath.Join(claude, "alpha", "SKILL.md")); !strings.Contains(got, "v1") {
+		t.Errorf("diff changed an installed skill: %q", got)
+	}
+	// The sync after a diff still applies the changes.
+	e.mustRun("sync")
+	if got := installed(t, claude); got != "alpha,beta,delta" {
+		t.Errorf("after sync got %q, want alpha,beta,delta", got)
+	}
+}
+
+func TestRegistrySetupCreatesAUsableRegistry(t *testing.T) {
+	e := newEnv(t)
+	dir := filepath.Join(t.TempDir(), "my-registry")
+	e.mustRun("registry", "setup", dir)
+	e.git(dir, "init", "--quiet", "-b", "main")
+	e.commit(dir, "init")
+
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "mine", dir)
+	if got := installed(t, filepath.Join(e.home, ".claude", "skills")); got != "example" {
+		t.Errorf("got %q, want example", got)
+	}
+	if code, _ := e.run("registry", "setup", dir); code == 0 {
+		t.Error("setup should refuse to overwrite an existing registry")
+	}
+}

@@ -66,3 +66,25 @@ func Fetch(ctx context.Context, url, ref, dir string) (string, error) {
 	}
 	return run(ctx, dir, "rev-parse", "HEAD")
 }
+
+// Diff returns the textual difference between two commits of the checkout
+// in dir, limited to subpath when it is not empty. A commit that is no
+// longer in the shallow checkout is fetched first.
+func Diff(ctx context.Context, dir, from, to, subpath string, stat bool) (string, error) {
+	for _, c := range []string{from, to} {
+		if _, err := run(ctx, dir, "cat-file", "-e", c+"^{commit}"); err != nil {
+			if _, err := run(ctx, dir, "fetch", "--quiet", "--depth", "1", "origin", c); err != nil {
+				return "", err
+			}
+		}
+	}
+	args := []string{"diff", "--no-color"}
+	if stat {
+		args = append(args, "--stat")
+	}
+	args = append(args, from, to)
+	if subpath != "" {
+		args = append(args, "--", subpath)
+	}
+	return run(ctx, dir, args...)
+}

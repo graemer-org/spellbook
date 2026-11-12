@@ -7,8 +7,9 @@ A team keeps its skills in one repository. Everyone subscribes once, and
 `spellbook sync` installs new skills, updates changed ones and removes the
 ones that were deleted, for both tools at the same time.
 
-> **Status:** early. Skills work today. Team groups, instructions, agents,
-> automatic sync and MCP servers are planned; see the roadmap below.
+> **Status:** early. Skills, team groups and the lock file work today.
+> Instructions, agents, automatic sync and MCP servers are planned; see the
+> roadmap below.
 
 ## Install
 
@@ -38,27 +39,37 @@ Spellbook works on two levels. They are independent, and you can use both.
 | Claude Code skills | `~/.claude/skills/` | `.claude/skills/` |
 | GitHub Copilot skills | `~/.copilot/skills/` | `.github/skills/` |
 | State | `~/.config/spellbook/state.json` | `.spellbook/state.json` |
+| Lock file | `~/.config/spellbook/spellbook.lock` | `spellbook.lock` |
 
 In a project, Spellbook writes real copies into the repository. Commit them
-together with `spellbook.toml` and `.spellbook/state.json`, so GitHub
-workflows and teammates see the same files.
+together with `spellbook.toml`, `spellbook.lock` and `.spellbook/state.json`,
+so GitHub workflows and teammates see the same files.
 
 ```sh
 cd my-repo
 spellbook init --project
 spellbook registry add acme git@github.com:acme/ai-registry.git --project
-git add spellbook.toml .spellbook .claude .github
+git add spellbook.toml spellbook.lock .spellbook .claude .github
 ```
 
 ## Commands
 
 ```sh
 spellbook init [--project] [--target claude] [--target copilot]
+
 spellbook registry add <name> <git-url> [--ref main] [--path teams/platform]
-                                        [--priority 10] [--skill name]... [--no-sync]
+                       [--group platform]... [--skill name]...
+                       [--priority 10] [--prefix all|collisions] [--no-sync]
 spellbook registry list
 spellbook registry remove <name> [--force]
-spellbook sync [--dry-run] [--force]
+spellbook registry setup <directory>
+
+spellbook group list <registry>
+spellbook group join <registry> <group>...
+spellbook group leave <registry> <group>...
+
+spellbook sync [--dry-run] [--force] [--locked]
+spellbook diff [registry] [--patch]
 spellbook list
 ```
 
@@ -79,12 +90,61 @@ ai-registry/
     └── terraform-review/SKILL.md
 ```
 
-- `--path platform` subscribes to one subdirectory only, for example one
-  team's folder.
+- `--path platform` subscribes to one subdirectory only.
 - `--skill code-review` installs only the named skills.
 - `--ref` follows a branch, or pins a tag or commit.
-- When two registries offer a skill with the same name, the registry with
-  the higher `--priority` wins and Spellbook prints a warning.
+
+### Team groups
+
+A registry can describe itself in a `registry.toml` at its root and sort its
+skills into groups. `spellbook registry setup <directory>` creates a starting
+point.
+
+```toml
+version = 1
+default_groups = ["base"]
+
+[groups.base]
+description = "For everyone"
+skills = ["code-review", "commit-style"]
+
+[groups.platform]
+description = "Platform team"
+include = ["base"]
+skills = ["terraform-review"]
+```
+
+- A subscriber who chooses no group gets `default_groups`. Without
+  `default_groups`, or without a `registry.toml`, they get every skill.
+- `include` pulls in everything from another group.
+- `spellbook group join acme platform` adds a group to the ones you already
+  have, `group leave` removes one, and `group list acme` shows what exists.
+
+### Name collisions
+
+When two registries offer a skill with the same name, the registry with the
+higher `--priority` wins and Spellbook prints a warning. To keep both, give
+a registry a prefix:
+
+- `--prefix collisions` installs a skill as `<registry>-<skill>` only when
+  the plain name is already taken.
+- `--prefix all` always installs under `<registry>-<skill>`.
+
+Spellbook rewrites the `name` in the skill's frontmatter to match.
+
+## Reviewing and pinning updates
+
+Every sync records the commit of each registry in `spellbook.lock`.
+
+```sh
+spellbook diff              # which skills changed upstream since the last sync
+spellbook diff acme --patch # with the textual difference
+spellbook sync              # move to the newest commits and update the lock
+spellbook sync --locked     # install exactly what the lock records
+```
+
+`sync --locked` is for teammates and CI: it reproduces the committed state
+and fails for a registry that is not in the lock file.
 
 ## Configuration
 
@@ -100,9 +160,11 @@ skills_path = "~/.agents/skills"   # default: ~/.copilot/skills
 name = "acme"
 url = "git@github.com:acme/ai-registry.git"
 ref = "main"
-path = "platform"
 priority = 10
-skills = ["terraform-review"]
+groups = ["platform"]
+prefix = "collisions"              # or "all"
+# path = "teams/platform"          # only this subdirectory
+# skills = ["terraform-review"]    # only these skills
 ```
 
 ## What Spellbook will and will not touch
@@ -119,7 +181,7 @@ Spellbook records everything it installs and only ever changes those paths.
 ## Roadmap
 
 1. Core and skills — done
-2. `registry.toml` manifest, team groups, prefixes for collisions, lockfile, `diff`
+2. `registry.toml` manifest, team groups, prefixes for collisions, lockfile, `diff` — done
 3. Instructions, layered (company, team, project) and path-scoped
 4. Agents and prompts
 5. Automatic sync, `sync --check` for CI, `doctor`

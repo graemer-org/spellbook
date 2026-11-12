@@ -23,7 +23,8 @@ go vet ./... && gofmt -l .    # must be clean before committing
 | `internal/cli` | cobra commands, all user-facing output |
 | `internal/config` | TOML config, the two scopes (home, project), validation |
 | `internal/target` | where each tool reads its files (`claude`, `copilot`) |
-| `internal/registry` | fetch a registry, discover resources in it |
+| `internal/registry` | fetch a registry, discover resources, read `registry.toml`, resolve groups |
+| `internal/lock` | `spellbook.lock`, the commit each registry was synced at |
 | `internal/gitx` | shell out to git |
 | `internal/syncer` | resolve what should be installed and apply it |
 | `internal/state` | record of what Spellbook wrote |
@@ -43,7 +44,13 @@ go vet ./... && gofmt -l .    # must be clean before committing
   committed and seen by GitHub workflows.
 - **Project state is portable.** Paths in `.spellbook/state.json` are
   relative to the project root.
-- **Config is TOML.** Unknown keys are an error.
+- **Config is TOML.** Unknown keys are an error. In a registry's
+  `registry.toml` they are only a warning, because a registry may describe
+  resource kinds a newer Spellbook understands.
+- **The installed name is what tools see.** A skill installed under a
+  prefixed name gets its frontmatter `name` rewritten, and the state hash is
+  the hash of the rewritten copy.
+- **`diff` changes nothing.** It never writes to targets, state or lock.
 
 ## Scopes
 
@@ -61,7 +68,7 @@ in a temporary home. Add a test there for every user-visible behaviour.
 
 1. Core and skills (done)
 2. Registry manifest `registry.toml`, team groups with `include`, prefixes
-   for collisions, lockfile, `diff`
+   for collisions, lockfile, `diff` (done)
 3. Instructions: managed blocks in `CLAUDE.md` and
    `copilot-instructions.md`, layering, path-scoped instruction files
 4. Agents and prompts, with frontmatter translation per target

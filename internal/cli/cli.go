@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -62,7 +64,7 @@ func newRoot() *cobra.Command {
 		return config.HomeLocation()
 	}
 
-	root.AddCommand(newInit(&project), newRegistry(locate), newSync(locate), newList(locate))
+	root.AddCommand(newInit(&project), newRegistry(locate), newGroup(locate), newSync(locate), newDiff(locate), newList(locate))
 	return root
 }
 
@@ -174,7 +176,9 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	add.Flags().StringVar(&reg.Ref, "ref", "", "branch, tag or commit to follow (default: the remote's default branch)")
 	add.Flags().StringVar(&reg.Path, "path", "", "only use this subdirectory of the repository")
 	add.Flags().IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
+	add.Flags().StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
 	add.Flags().StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
+	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of skill names: 'all', or 'collisions' for taken names only")
 	add.Flags().BoolVar(&noSync, "no-sync", false, "add the registry without syncing")
 
 	list := &cobra.Command{
@@ -195,13 +199,17 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tURL\tREF\tPATH\tPRIORITY\tSKILLS")
+			fmt.Fprintln(w, "NAME\tURL\tREF\tPATH\tPRIORITY\tGROUPS\tSKILLS\tPREFIX")
 			for _, r := range cfg.Registries {
+				groups := "default"
+				if len(r.Groups) > 0 {
+					groups = strings.Join(r.Groups, ",")
+				}
 				skills := "all"
 				if len(r.Skills) > 0 {
 					skills = strings.Join(r.Skills, ",")
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n", r.Name, r.URL, dash(r.Ref), dash(r.Path), r.Priority, skills)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\n", r.Name, r.URL, dash(r.Ref), dash(r.Path), r.Priority, groups, skills, dash(r.Prefix))
 			}
 			return w.Flush()
 		},
@@ -236,7 +244,281 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	}
 	remove.Flags().BoolVar(&force, "force", false, "also remove skills that were edited locally")
 
-	cmd.AddCommand(add, list, remove)
+	setup := &cobra.Command{
+		Use:   "setup <directory>",
+		Short: "Create the skeleton of a new registry",
+		Long: "Create a directory with a registry.toml and an example skill. Turn it into a\n" +
+			"git repository and push it, then others can subscribe with 'registry add'.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := args[0]
+			manifest := filepath.Join(dir, registry.ManifestFile)
+			if _, err := os.Stat(manifest); err == nil {
+				return fmt.Errorf("%s already exists", manifest)
+			}
+			files := map[string]string{
+				manifest: setupManifest,
+				filepath.Join(dir, "skills", "example", registry.SkillFile): setupSkill,
+			}
+			for path, content := range files {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+					return err
+				}
+			}
+			out := cmd.OutOrStdout()
+			fmt.Fprintf(out, "Created a registry in %s\n", dir)
+			fmt.Fprintln(out, "Next: git init, commit and push it, then: spellbook registry add <name> <git-url>")
+			return nil
+		},
+	}
+
+	cmd.AddCommand(add, list, remove, setup)
+	return cmd
+}
+
+const setupManifest = `# Describes this registry for spellbook.
+version = 1
+
+# What a subscriber gets who did not choose a group.
+default_groups = ["base"]
+
+[groups.base]
+description = "For everyone"
+skills = ["example"]
+
+# A team group that also contains everything from base:
+#
+# [groups.platform]
+# description = "Platform team"
+# include = ["base"]
+# skills = ["terraform-review"]
+`
+
+const setupSkill = `---
+name: example
+description: Replace this with what the skill does and when to use it.
+---
+
+# Example
+
+Write the instructions for the agent here.
+`
+
+func newGroup(locate func() (config.Location, error)) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "group",
+		Short: "Join and leave the groups a registry defines",
+	}
+
+	list := &cobra.Command{
+		Use:   "list <registry>",
+		Short: "List the groups of a registry",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loc, err := locate()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(loc)
+			if err != nil {
+				return err
+			}
+			reg, ok := cfg.Registry(args[0])
+			if !ok {
+				return fmt.Errorf("no registry named %q", args[0])
+			}
+			snap, err := registry.Fetch(cmd.Context(), reg)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if snap.Manifest == nil || len(snap.Manifest.Groups) == 0 {
+				fmt.Fprintf(out, "Registry %s defines no groups.\n", reg.Name)
+				return nil
+			}
+			joined := map[string]bool{}
+			for _, g := range snap.Groups {
+				joined[g] = true
+			}
+			w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(w, "GROUP\tJOINED\tINCLUDES\tSKILLS\tDESCRIPTION")
+			for _, name := range snap.Manifest.GroupNames() {
+				g := snap.Manifest.Groups[name]
+				state := "-"
+				if joined[name] {
+					state = "yes"
+					if len(reg.Groups) == 0 {
+						state = "default"
+					}
+				}
+				skills, err := snap.Manifest.Skills([]string{name})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", name, state, dash(strings.Join(g.Include, ",")), len(skills), dash(g.Description))
+			}
+			return w.Flush()
+		},
+	}
+
+	// change loads the registry, applies edit to its groups, checks the
+	// result against the registry and only then saves and syncs.
+	// edit also receives the groups currently in effect, which are the
+	// registry's defaults when none are configured.
+	change := func(cmd *cobra.Command, name string, edit func(groups, effective []string) []string) error {
+		loc, err := locate()
+		if err != nil {
+			return err
+		}
+		cfg, err := config.Load(loc)
+		if err != nil {
+			return err
+		}
+		for i := range cfg.Registries {
+			if cfg.Registries[i].Name != name {
+				continue
+			}
+			current, err := registry.Fetch(cmd.Context(), cfg.Registries[i])
+			if err != nil {
+				return err
+			}
+			cfg.Registries[i].Groups = edit(cfg.Registries[i].Groups, current.Groups)
+			if _, err := registry.Fetch(cmd.Context(), cfg.Registries[i]); err != nil {
+				return err
+			}
+			if err := config.Save(loc, cfg); err != nil {
+				return err
+			}
+			groups := "the registry's default"
+			if g := cfg.Registries[i].Groups; len(g) > 0 {
+				groups = strings.Join(g, ", ")
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Groups of %s: %s\n", name, groups)
+			return runSync(cmd, loc, cfg, syncer.Options{})
+		}
+		return fmt.Errorf("no registry named %q", name)
+	}
+
+	join := &cobra.Command{
+		Use:   "join <registry> <group>...",
+		Short: "Join groups of a registry and sync",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return change(cmd, args[0], func(groups, effective []string) []string {
+				if len(groups) == 0 {
+					// Joining a group adds to the defaults instead of replacing them.
+					groups = slices.Clone(effective)
+				}
+				for _, g := range args[1:] {
+					if !slices.Contains(groups, g) {
+						groups = append(groups, g)
+					}
+				}
+				return groups
+			})
+		},
+	}
+
+	leave := &cobra.Command{
+		Use:   "leave <registry> <group>...",
+		Short: "Leave groups of a registry and sync",
+		Long: "Leave groups of a registry and sync. Leaving the last group falls back to the\n" +
+			"registry's default groups.",
+		Args: cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loc, err := locate()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(loc)
+			if err != nil {
+				return err
+			}
+			if reg, ok := cfg.Registry(args[0]); ok {
+				for _, g := range args[1:] {
+					if !slices.Contains(reg.Groups, g) {
+						return fmt.Errorf("registry %q is not in group %q", args[0], g)
+					}
+				}
+			}
+			return change(cmd, args[0], func(groups, _ []string) []string {
+				return slices.DeleteFunc(groups, func(g string) bool { return slices.Contains(args[1:], g) })
+			})
+		},
+	}
+
+	cmd.AddCommand(list, join, leave)
+	return cmd
+}
+
+func newDiff(locate func() (config.Location, error)) *cobra.Command {
+	var patch bool
+	cmd := &cobra.Command{
+		Use:   "diff [registry]",
+		Short: "Show what changed upstream since the last sync",
+		Long: "Compare each registry at the commit of the last sync with its newest commit.\n" +
+			"Nothing is installed and the lock file stays as it is.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			loc, err := locate()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(loc)
+			if err != nil {
+				return err
+			}
+			regs := cfg.Registries
+			if len(args) == 1 {
+				reg, ok := cfg.Registry(args[0])
+				if !ok {
+					return fmt.Errorf("no registry named %q", args[0])
+				}
+				regs = []config.Registry{reg}
+			}
+			out := cmd.OutOrStdout()
+			failed := false
+			for _, r := range regs {
+				d, err := syncer.Compare(cmd.Context(), loc, r, patch)
+				if err != nil {
+					fmt.Fprintf(cmd.ErrOrStderr(), "error: registry %s: %v\n", r.Name, err)
+					failed = true
+					continue
+				}
+				switch {
+				case d.From == "":
+					fmt.Fprintf(out, "%s: not synced yet, newest is %s\n", d.Name, short(d.To))
+				case d.From == d.To:
+					fmt.Fprintf(out, "%s: up to date at %s\n", d.Name, short(d.To))
+					continue
+				case !d.HasChanges():
+					fmt.Fprintf(out, "%s: %s -> %s, no change to your skills\n", d.Name, short(d.From), short(d.To))
+				default:
+					fmt.Fprintf(out, "%s: %s -> %s\n", d.Name, short(d.From), short(d.To))
+				}
+				for _, n := range d.Added {
+					fmt.Fprintf(out, "  + %s\n", n)
+				}
+				for _, n := range d.Changed {
+					fmt.Fprintf(out, "  ~ %s\n", n)
+				}
+				for _, n := range d.Removed {
+					fmt.Fprintf(out, "  - %s\n", n)
+				}
+				if d.Patch != "" {
+					fmt.Fprintln(out, d.Patch)
+				}
+			}
+			if failed {
+				return errSyncFailed
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&patch, "patch", false, "also print the textual difference")
 	return cmd
 }
 
@@ -260,6 +542,7 @@ func newSync(locate func() (config.Location, error)) *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&opts.DryRun, "dry-run", "n", false, "show what would change without writing anything")
 	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite and remove skills that were edited locally")
+	cmd.Flags().BoolVar(&opts.Locked, "locked", false, "install the commits recorded in spellbook.lock instead of the newest ones")
 	return cmd
 }
 
@@ -280,7 +563,11 @@ func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts s
 			fmt.Fprintf(errOut, "error: registry %s: %v\n", r.Name, r.Err)
 			continue
 		}
-		fmt.Fprintf(out, "%-12s %d skills at %s\n", r.Name, r.Skills, short(r.Commit))
+		was := ""
+		if r.Previous != "" && r.Previous != r.Commit {
+			was = fmt.Sprintf(" (was %s)", short(r.Previous))
+		}
+		fmt.Fprintf(out, "%-12s %d skills at %s%s\n", r.Name, r.Skills, short(r.Commit), was)
 	}
 	names := make([]string, 0, len(rep.Targets))
 	for n := range rep.Targets {
