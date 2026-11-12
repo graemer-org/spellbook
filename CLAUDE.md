@@ -22,7 +22,8 @@ go vet ./... && gofmt -l .    # must be clean before committing
 | `cmd/spellbook` | `main`, nothing else |
 | `internal/cli` | cobra commands, all user-facing output |
 | `internal/config` | TOML config, the two scopes (home, project), validation |
-| `internal/target` | where each tool reads its files (`claude`, `copilot`) |
+| `internal/target` | where each tool reads its files and in which format (`claude`, `copilot`) |
+| `internal/blocks` | marked blocks inside files the user also edits |
 | `internal/registry` | fetch a registry, discover resources, read `registry.toml`, resolve groups |
 | `internal/lock` | `spellbook.lock`, the commit each registry was synced at |
 | `internal/gitx` | shell out to git |
@@ -50,6 +51,13 @@ go vet ./... && gofmt -l .    # must be clean before committing
 - **The installed name is what tools see.** A skill installed under a
   prefixed name gets its frontmatter `name` rewritten, and the state hash is
   the hash of the rewritten copy.
+- **Never edit the user's `CLAUDE.md`.** Claude Code instructions are files
+  in `.claude/rules/`. Only Copilot's always-on instructions need a shared
+  file, and there only the text between `spellbook:begin` and
+  `spellbook:end` markers may change. A block that is not in the state file
+  is left alone.
+- **Syncing twice changes nothing.** The second run must report everything
+  as unchanged and must not rewrite any file.
 - **`diff` changes nothing.** It never writes to targets, state or lock.
 
 ## Scopes
@@ -69,8 +77,13 @@ in a temporary home. Add a test there for every user-visible behaviour.
 1. Core and skills (done)
 2. Registry manifest `registry.toml`, team groups with `include`, prefixes
    for collisions, lockfile, `diff` (done)
-3. Instructions: managed blocks in `CLAUDE.md` and
-   `copilot-instructions.md`, layering, path-scoped instruction files
+3. Instructions: rule files for Claude Code, managed blocks in
+   `copilot-instructions.md`, layering, path-scoped instruction files (done)
 4. Agents and prompts, with frontmatter translation per target
 5. Automatic sync, `sync --check` for CI, `doctor`
 6. MCP servers and hooks, allowed per registry
+7. Installation with Homebrew through a tap
+
+## Workflow
+
+Work happens directly on `main`.

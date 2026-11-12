@@ -40,9 +40,13 @@ type Snapshot struct {
 	// or the registry's default groups. Empty means no group filter.
 	Groups []string
 	// All holds every skill of the registry, Skills the selected ones.
-	All      []Skill
-	Skills   []Skill
-	Warnings []string
+	All    []Skill
+	Skills []Skill
+	// AllInstructions holds every instruction, Instructions the selected
+	// ones in the order they should be read in.
+	AllInstructions []Instruction
+	Instructions    []Instruction
+	Warnings        []string
 }
 
 // CacheRoot returns the directory registry checkouts are kept in.
@@ -96,57 +100,67 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 		return nil, err
 	}
 	warnings = append(warnings, mwarn...)
-	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all}
-	snap.Skills, snap.Groups, warnings, err = selectSkills(all, manifest, r, warnings)
+	instructions, iwarn, err := DiscoverInstructions(root)
 	if err != nil {
 		return nil, err
+	}
+	warnings = append(warnings, iwarn...)
+
+	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Manifest: manifest, All: all, AllInstructions: instructions}
+	groups := r.Groups
+	if len(groups) > 0 && manifest == nil {
+		return nil, fmt.Errorf("groups are configured, but the registry has no %s", ManifestFile)
+	}
+	if len(groups) == 0 && manifest != nil {
+		groups = manifest.DefaultGroups
+	}
+	snap.Groups = groups
+
+	if r.Wants(config.KindSkills) {
+		snap.Skills = all
+		if len(groups) > 0 {
+			names, err := manifest.Skills(groups)
+			if err != nil {
+				return nil, err
+			}
+			snap.Skills, warnings = pick(all, names, func(s Skill) string { return s.Name }, warnings, "a group lists skill %q, which is not in the registry")
+		}
+		if len(r.Skills) > 0 {
+			snap.Skills, warnings = pick(snap.Skills, r.Skills, func(s Skill) string { return s.Name }, warnings, "skill %q is configured but not offered by the registry or the selected groups")
+		}
+		sort.Slice(snap.Skills, func(i, j int) bool { return snap.Skills[i].Name < snap.Skills[j].Name })
+	}
+	if r.Wants(config.KindInstructions) {
+		snap.Instructions = instructions
+		if len(groups) > 0 {
+			names, err := manifest.Instructions(groups)
+			if err != nil {
+				return nil, err
+			}
+			snap.Instructions, warnings = pick(instructions, names, func(i Instruction) string { return i.Name }, warnings, "a group lists instruction %q, which is not in the registry")
+		}
 	}
 	snap.Warnings = warnings
 	return snap, nil
 }
 
-// selectSkills narrows the skills of a registry to what the subscriber
-// asked for: first by group, then by the explicit skill list.
-func selectSkills(all []Skill, m *Manifest, r config.Registry, warnings []string) ([]Skill, []string, []string, error) {
-	groups := r.Groups
-	if len(groups) > 0 && m == nil {
-		return nil, nil, nil, fmt.Errorf("groups are configured, but the registry has no %s", ManifestFile)
+// pick returns the items with the wanted names, in the order of want, and
+// warns about names that match nothing.
+func pick[T any](items []T, want []string, name func(T) string, warnings []string, missing string) ([]T, []string) {
+	byName := map[string]T{}
+	for _, it := range items {
+		byName[name(it)] = it
 	}
-	if len(groups) == 0 && m != nil {
-		groups = m.DefaultGroups
-	}
-	selected := all
-	if len(groups) > 0 {
-		names, err := m.Skills(groups)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		selected, warnings = pick(all, names, warnings, "a group lists skill %q, which is not in the registry")
-	}
-	if len(r.Skills) > 0 {
-		selected, warnings = pick(selected, r.Skills, warnings, "skill %q is configured but not offered by the registry or the selected groups")
-	}
-	return selected, groups, warnings, nil
-}
-
-// pick returns the skills with the wanted names and warns about names that
-// match nothing.
-func pick(skills []Skill, want []string, warnings []string, missing string) ([]Skill, []string) {
-	byName := map[string]Skill{}
-	for _, s := range skills {
-		byName[s.Name] = s
-	}
-	var out []Skill
-	for _, name := range want {
-		s, ok := byName[name]
+	var out []T
+	for _, n := range want {
+		it, ok := byName[n]
 		if !ok {
-			warnings = append(warnings, fmt.Sprintf(missing, name))
+			warnings = append(warnings, fmt.Sprintf(missing, n))
 			continue
 		}
-		out = append(out, s)
-		delete(byName, name)
+		out = append(out, it)
+		delete(byName, n)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, warnings
 }
 

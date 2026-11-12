@@ -579,3 +579,237 @@ func TestRegistrySetupCreatesAUsableRegistry(t *testing.T) {
 		t.Error("setup should refuse to overwrite an existing registry")
 	}
 }
+
+const instructionManifest = `version = 1
+default_groups = ["team"]
+
+[groups.base]
+instructions = ["standards"]
+
+[groups.team]
+include = ["base"]
+skills = ["review"]
+instructions = ["tf-style", "team-rules"]
+`
+
+// instructionRepo is a registry with always-on and path-scoped instructions.
+func (e *env) instructionRepo() string {
+	e.t.Helper()
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	write(e.t, filepath.Join(repo, "registry.toml"), instructionManifest)
+	write(e.t, filepath.Join(repo, "instructions", "standards.md"), "---\ndescription: Company\n---\n# Standards\n\nUse tabs. v1\n")
+	write(e.t, filepath.Join(repo, "instructions", "team-rules.md"), "Ask the platform team. v1\n")
+	write(e.t, filepath.Join(repo, "instructions", "tf-style.md"), "---\npaths:\n  - \"infra/**/*.tf\"\n  - \"modules/**\"\n---\nPin provider versions.\n")
+	e.commit(repo, "instructions")
+	return repo
+}
+
+func TestInstructionsAreWrittenInEachToolsFormat(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	e.mustRun("init")
+	out := e.mustRun("registry", "add", "acme", repo)
+	if !strings.Contains(out, "1 skills, 3 instructions") {
+		t.Errorf("summary does not count the instructions:\n%s", out)
+	}
+
+	// Claude Code: one rule file per instruction, CLAUDE.md untouched.
+	rules := filepath.Join(e.home, ".claude", "rules")
+	if got := read(t, filepath.Join(rules, "standards.md")); !strings.Contains(got, "Use tabs. v1") || strings.HasPrefix(got, "---") {
+		t.Errorf("always-on rule is wrong:\n%s", got)
+	}
+	if got := read(t, filepath.Join(rules, "tf-style.md")); !strings.HasPrefix(got, "---\npaths:\n  - \"infra/**/*.tf\"\n  - \"modules/**\"\n---\n") {
+		t.Errorf("path-scoped rule has the wrong frontmatter:\n%s", got)
+	}
+	if exists(filepath.Join(e.home, ".claude", "CLAUDE.md")) {
+		t.Error("CLAUDE.md must not be created")
+	}
+
+	// Copilot: always-on instructions as blocks, base group first.
+	shared := read(t, filepath.Join(e.home, ".copilot", "copilot-instructions.md"))
+	first := strings.Index(shared, "<!-- spellbook:begin acme/standards -->")
+	second := strings.Index(shared, "<!-- spellbook:begin acme/team-rules -->")
+	if first < 0 || second < 0 || first > second {
+		t.Errorf("blocks are missing or the included group does not come first:\n%s", shared)
+	}
+	if strings.Contains(shared, "Pin provider versions") {
+		t.Errorf("a path-scoped instruction must not be in the always-on file:\n%s", shared)
+	}
+	scoped := read(t, filepath.Join(e.home, ".copilot", "instructions", "tf-style.instructions.md"))
+	if !strings.HasPrefix(scoped, "---\napplyTo: \"infra/**/*.tf,modules/**\"\n---\n") {
+		t.Errorf("Copilot path-scoped file has the wrong frontmatter:\n%s", scoped)
+	}
+
+	// A second sync changes nothing, byte for byte.
+	out = e.mustRun("sync")
+	if !strings.Contains(out, "claude       0 installed, 0 updated, 4 unchanged") || !strings.Contains(out, "copilot      0 installed, 0 updated, 4 unchanged") {
+		t.Errorf("second sync is not a no-op:\n%s", out)
+	}
+	if read(t, filepath.Join(e.home, ".copilot", "copilot-instructions.md")) != shared {
+		t.Error("second sync rewrote the shared file")
+	}
+}
+
+func TestBlocksLeaveTheUsersTextAlone(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	shared := filepath.Join(e.home, ".copilot", "copilot-instructions.md")
+	write(t, shared, "# My own notes\n\nAlways answer in German.\n")
+	e.mustRun("init", "--target", "copilot")
+	e.mustRun("registry", "add", "acme", repo)
+
+	got := read(t, shared)
+	if !strings.HasPrefix(got, "# My own notes\n\nAlways answer in German.\n\n<!-- spellbook:begin") {
+		t.Fatalf("the user's text was changed or the blocks are not appended:\n%s", got)
+	}
+
+	// Upstream changes one instruction and drops another.
+	write(t, filepath.Join(repo, "instructions", "standards.md"), "Use spaces. v2\n")
+	if err := os.Remove(filepath.Join(repo, "instructions", "team-rules.md")); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(repo, "registry.toml"), strings.Replace(instructionManifest, `, "team-rules"`, "", 1))
+	e.commit(repo, "v2")
+	e.mustRun("sync")
+
+	got = read(t, shared)
+	if !strings.Contains(got, "Use spaces. v2") || strings.Contains(got, "Use tabs. v1") {
+		t.Errorf("block was not updated:\n%s", got)
+	}
+	if strings.Contains(got, "team-rules") {
+		t.Errorf("removed instruction still has a block:\n%s", got)
+	}
+
+	e.mustRun("registry", "remove", "acme")
+	if got := read(t, shared); got != "# My own notes\n\nAlways answer in German.\n" {
+		t.Errorf("after removing the registry only the user's text should remain, got:\n%q", got)
+	}
+}
+
+func TestSharedFileWithOnlyBlocksIsRemovedWithThem(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	e.mustRun("init", "--target", "copilot")
+	e.mustRun("registry", "add", "acme", repo)
+	shared := filepath.Join(e.home, ".copilot", "copilot-instructions.md")
+	if !exists(shared) {
+		t.Fatal("shared file was not created")
+	}
+	e.mustRun("registry", "remove", "acme")
+	if exists(shared) {
+		t.Errorf("a file spellbook created should not be left behind empty: %q", read(t, shared))
+	}
+}
+
+func TestLocallyEditedBlockAndRuleAreKept(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	e.mustRun("init")
+	e.mustRun("registry", "add", "acme", repo)
+
+	shared := filepath.Join(e.home, ".copilot", "copilot-instructions.md")
+	rule := filepath.Join(e.home, ".claude", "rules", "standards.md")
+	write(t, shared, strings.Replace(read(t, shared), "Use tabs. v1", "Use tabs. MY EDIT", 1))
+	write(t, rule, "MY RULE EDIT\n")
+
+	write(t, filepath.Join(repo, "instructions", "standards.md"), "Use spaces. v2\n")
+	e.commit(repo, "v2")
+	out := e.mustRun("sync")
+	if !strings.Contains(read(t, shared), "MY EDIT") || read(t, rule) != "MY RULE EDIT\n" {
+		t.Fatal("local edits were overwritten without --force")
+	}
+	if strings.Count(out, "edited locally") != 2 {
+		t.Errorf("expected a warning for the block and for the rule:\n%s", out)
+	}
+
+	e.mustRun("sync", "--force")
+	if got := read(t, shared); !strings.Contains(got, "Use spaces. v2") || strings.Contains(got, "MY EDIT") {
+		t.Errorf("--force did not overwrite the block:\n%s", got)
+	}
+	if got := read(t, rule); !strings.Contains(got, "Use spaces. v2") {
+		t.Errorf("--force did not overwrite the rule:\n%s", got)
+	}
+}
+
+func TestUnmanagedRuleFileIsNotOverwritten(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	rule := filepath.Join(e.home, ".claude", "rules", "standards.md")
+	write(t, rule, "mine\n")
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	e.mustRun("sync", "--force")
+	if got := read(t, rule); got != "mine\n" {
+		t.Errorf("a rule file the user wrote was overwritten: %q", got)
+	}
+}
+
+func TestInstructionsFollowRegistryPriority(t *testing.T) {
+	e := newEnv(t)
+	team := e.repo(map[string]string{"team-skill": "x"})
+	write(t, filepath.Join(team, "instructions", "team.md"), "Team guidance.\n")
+	e.commit(team, "team")
+	company := e.repo(map[string]string{"company-skill": "x"})
+	write(t, filepath.Join(company, "instructions", "company.md"), "Company guidance.\n")
+	e.commit(company, "company")
+
+	e.mustRun("init", "--target", "copilot")
+	e.mustRun("registry", "add", "team", team)
+	e.mustRun("registry", "add", "company", company, "--priority", "10")
+
+	shared := read(t, filepath.Join(e.home, ".copilot", "copilot-instructions.md"))
+	if c, tm := strings.Index(shared, "Company guidance."), strings.Index(shared, "Team guidance."); c < 0 || tm < 0 || c > tm {
+		t.Errorf("the higher priority registry should come first:\n%s", shared)
+	}
+}
+
+func TestProjectInstructionsGoIntoTheRepository(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	project := t.TempDir()
+	t.Chdir(project)
+	e.mustRun("init", "--project")
+	e.mustRun("registry", "add", "acme", repo, "-p")
+
+	for _, rel := range []string{
+		".claude/rules/standards.md",
+		".claude/rules/tf-style.md",
+		".github/copilot-instructions.md",
+		".github/instructions/tf-style.instructions.md",
+	} {
+		if !exists(filepath.Join(project, rel)) {
+			t.Errorf("%s is missing in the project", rel)
+		}
+	}
+	if exists(filepath.Join(e.home, ".copilot")) || exists(filepath.Join(e.home, ".claude")) {
+		t.Error("project sync wrote instructions into the home directory")
+	}
+}
+
+func TestOnlyLimitsTheKindsOfResources(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo, "--only", "skills")
+	if exists(filepath.Join(e.home, ".claude", "rules")) {
+		t.Error("--only skills installed instructions")
+	}
+	if !exists(filepath.Join(e.home, ".claude", "skills", "review")) {
+		t.Error("--only skills did not install the skill")
+	}
+	if code, out := e.run("registry", "add", "other", repo, "--only", "nonsense"); code == 0 {
+		t.Errorf("an unknown kind should be rejected:\n%s", out)
+	}
+}
+
+func TestDiffListsChangedInstructions(t *testing.T) {
+	e := newEnv(t)
+	repo := e.instructionRepo()
+	e.mustRun("init", "--target", "claude")
+	e.mustRun("registry", "add", "acme", repo)
+	write(t, filepath.Join(repo, "instructions", "standards.md"), "Use spaces. v2\n")
+	e.commit(repo, "v2")
+	if out := e.mustRun("diff"); !strings.Contains(out, "~ instructions/standards") {
+		t.Errorf("diff does not list the changed instruction:\n%s", out)
+	}
+}

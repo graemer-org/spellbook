@@ -4,23 +4,33 @@ package syncer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/graemer-org/spellbook/internal/blocks"
 	"github.com/graemer-org/spellbook/internal/config"
 	"github.com/graemer-org/spellbook/internal/fsutil"
-	"github.com/graemer-org/spellbook/internal/gitx"
 	"github.com/graemer-org/spellbook/internal/lock"
 	"github.com/graemer-org/spellbook/internal/registry"
 	"github.com/graemer-org/spellbook/internal/state"
 	"github.com/graemer-org/spellbook/internal/target"
 )
 
-// KindSkill is the state kind of a skill directory.
-const KindSkill = "skill"
+// Kinds of state entries.
+const (
+	// KindSkill is a skill directory.
+	KindSkill = "skill"
+	// KindInstruction is an instruction in a file of its own.
+	KindInstruction = "instruction"
+	// KindBlock is an instruction kept as a marked block inside a file that
+	// may also hold the user's text. Its state path is "<file>#<block id>".
+	KindBlock = "instruction-block"
+)
 
 // FetchFunc fetches one registry. Tests replace it.
 type FetchFunc func(ctx context.Context, r config.Registry) (*registry.Snapshot, error)
@@ -43,9 +53,10 @@ type RegistryReport struct {
 	Name   string
 	Commit string
 	// Previous is the commit of the last sync, empty on the first one.
-	Previous string
-	Skills   int
-	Err      error
+	Previous     string
+	Skills       int
+	Instructions int
+	Err          error
 }
 
 // Counts summarises the changes made to one target.
@@ -70,26 +81,80 @@ func (r *Report) Failed() bool {
 	return false
 }
 
-type desired struct {
+// item is a file or directory that belongs to one resource alone.
+type item struct {
 	abs      string
 	target   string
+	kind     string
 	name     string
-	src      string
-	hash     string
 	registry string
 	commit   string
+	hash     string
+	// dir is the directory to copy for a skill; content is what to write
+	// for a file.
+	dir     string
+	content []byte
+}
+
+func (it item) write() error {
+	if it.dir != "" {
+		return fsutil.ReplaceDir(it.dir, it.abs)
+	}
+	return writeFile(it.abs, it.content)
+}
+
+// block is an instruction that becomes a marked section of a shared file.
+type block struct {
+	id       string
+	target   string
+	name     string
+	registry string
+	commit   string
+	body     string
+}
+
+// resource is a skill or instruction that won its name.
+type resource struct {
+	name     string
+	registry string
+	commit   string
+	// Skills.
+	dir  string
+	hash string
+	// Instructions.
+	ins registry.Instruction
+}
+
+// run carries the state of one sync.
+type run struct {
+	loc    config.Location
+	opts   Options
+	rep    *Report
+	old    map[string]state.Entry
+	failed map[string]bool
+	// entries is the state after the sync.
+	entries []state.Entry
+}
+
+func (r *run) counts(t string) *Counts {
+	if r.rep.Targets[t] == nil {
+		r.rep.Targets[t] = &Counts{}
+	}
+	return r.rep.Targets[t]
+}
+
+func (r *run) warnf(format string, args ...any) {
+	r.rep.Warnings = append(r.rep.Warnings, fmt.Sprintf(format, args...))
 }
 
 // Run fetches every registry of cfg and installs, updates and removes
-// resources so the enabled targets match. It only ever touches paths that
-// are recorded in the state file of loc.
+// resources so the enabled targets match. It only ever touches paths and
+// blocks that are recorded in the state file of loc.
 func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Options) (*Report, error) {
 	fetch := opts.Fetch
 	if fetch == nil {
 		fetch = registry.Fetch
 	}
-	rep := &Report{Targets: map[string]*Counts{}}
-
 	st, err := state.Load(loc.StatePath)
 	if err != nil {
 		return nil, err
@@ -98,6 +163,7 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 	if err != nil {
 		return nil, err
 	}
+	r := &run{loc: loc, opts: opts, rep: &Report{Targets: map[string]*Counts{}}, old: st.ByPath(), failed: map[string]bool{}}
 	var locked []lock.Entry
 
 	// Skills installed under a prefixed name are staged here first, because
@@ -112,201 +178,117 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 	regs := append([]config.Registry(nil), cfg.Registries...)
 	sort.SliceStable(regs, func(i, j int) bool { return regs[i].Priority > regs[j].Priority })
 
-	type winner struct {
-		src      string
-		registry string
-		commit   string
-		hash     string
-	}
-	winners := map[string]*winner{}
-	failed := map[string]bool{}
-	fail := func(r config.Registry, prev lock.Entry, hasPrev bool, err error) {
-		failed[r.Name] = true
-		rep.Registries = append(rep.Registries, RegistryReport{Name: r.Name, Err: err})
-		if hasPrev {
-			locked = append(locked, prev)
-		}
-	}
-	for _, r := range regs {
-		prev, hasPrev := lk.Get(r.Name)
-		if hasPrev && prev.URL != r.URL {
+	var skills, instructions []resource
+	skillNames, instructionNames := map[string]string{}, map[string]string{}
+	for _, reg := range regs {
+		prev, hasPrev := lk.Get(reg.Name)
+		if hasPrev && prev.URL != reg.URL {
 			hasPrev = false
 		}
-		at := r
+		fail := func(err error) {
+			r.failed[reg.Name] = true
+			r.rep.Registries = append(r.rep.Registries, RegistryReport{Name: reg.Name, Err: err})
+			if hasPrev {
+				locked = append(locked, prev)
+			}
+		}
+		at := reg
 		if opts.Locked {
 			if !hasPrev {
-				fail(r, prev, false, fmt.Errorf("not in %s; run 'spellbook sync' without --locked first", config.LockFile))
+				fail(fmt.Errorf("not in %s; run 'spellbook sync' without --locked first", config.LockFile))
 				continue
 			}
 			at.Ref = prev.Commit
 		}
 		snap, err := fetch(ctx, at)
 		if err != nil {
-			fail(r, prev, hasPrev, err)
+			fail(err)
 			continue
 		}
-		rr := RegistryReport{Name: r.Name, Commit: snap.Commit, Skills: len(snap.Skills)}
+		rr := RegistryReport{Name: reg.Name, Commit: snap.Commit, Skills: len(snap.Skills), Instructions: len(snap.Instructions)}
 		if hasPrev {
 			rr.Previous = prev.Commit
 		}
-		rep.Registries = append(rep.Registries, rr)
-		locked = append(locked, lock.Entry{Name: r.Name, URL: r.URL, Ref: r.Ref, Commit: snap.Commit})
+		r.rep.Registries = append(r.rep.Registries, rr)
+		locked = append(locked, lock.Entry{Name: reg.Name, URL: reg.URL, Ref: reg.Ref, Commit: snap.Commit})
 		for _, w := range snap.Warnings {
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: %s", r.Name, w))
+			r.warnf("%s: %s", reg.Name, w)
 		}
+
 		for _, s := range snap.Skills {
-			name := s.Name
-			if r.Prefix == config.PrefixAll {
-				name = r.Name + "-" + s.Name
-			}
-			if w, taken := winners[name]; taken {
-				if r.Prefix != config.PrefixCollisions {
-					rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: skill %q is also provided by %q, which has priority", r.Name, name, w.registry))
-					continue
-				}
-				name = r.Name + "-" + s.Name
-				if w, taken := winners[name]; taken {
-					rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: skill %q is also provided by %q, which has priority", r.Name, name, w.registry))
-					continue
-				}
-			}
-			if !config.ValidName(name) {
-				rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: skipped skill %q: the prefixed name %q is not a valid skill name", r.Name, s.Name, name))
+			name, ok := r.claim(skillNames, reg, "skill", s.Name)
+			if !ok {
 				continue
 			}
 			src := s.Dir
 			if name != s.Name {
 				src = filepath.Join(staging, name)
 				if err := fsutil.CopyDir(s.Dir, src); err != nil {
-					return nil, fmt.Errorf("stage skill %q of %s: %w", s.Name, r.Name, err)
+					return nil, fmt.Errorf("stage skill %q of %s: %w", s.Name, reg.Name, err)
 				}
 				if err := registry.RewriteName(src, name); err != nil {
-					return nil, fmt.Errorf("stage skill %q of %s: %w", s.Name, r.Name, err)
+					return nil, fmt.Errorf("stage skill %q of %s: %w", s.Name, reg.Name, err)
 				}
 			}
 			hash, err := fsutil.HashDir(src)
 			if err != nil {
-				return nil, fmt.Errorf("hash skill %q of %s: %w", s.Name, r.Name, err)
+				return nil, fmt.Errorf("hash skill %q of %s: %w", s.Name, reg.Name, err)
 			}
-			winners[name] = &winner{src: src, registry: r.Name, commit: snap.Commit, hash: hash}
+			skills = append(skills, resource{name: name, registry: reg.Name, commit: snap.Commit, dir: src, hash: hash})
+		}
+		for _, ins := range snap.Instructions {
+			name, ok := r.claim(instructionNames, reg, "instruction", ins.Name)
+			if !ok {
+				continue
+			}
+			instructions = append(instructions, resource{name: name, registry: reg.Name, commit: snap.Commit, ins: ins})
 		}
 	}
 
-	want := map[string]desired{}
+	// Work out what each target should contain.
+	want := map[string]item{}
+	wantBlocks := map[string][]block{}
+	add := func(it item) {
+		key := pathKey(loc.Root, it.abs)
+		if _, dup := want[key]; !dup {
+			// A duplicate means two targets share one directory.
+			want[key] = it
+		}
+	}
 	for _, tname := range cfg.EnabledTargets() {
+		r.counts(tname)
 		dir, err := target.SkillsDir(tname, cfg.Targets[tname], loc)
 		if err != nil {
 			return nil, err
 		}
-		rep.Targets[tname] = &Counts{}
-		for name, w := range winners {
-			abs := filepath.Join(dir, name)
-			key := pathKey(loc.Root, abs)
-			if _, dup := want[key]; dup {
-				// Two targets configured to share one directory.
+		for _, s := range skills {
+			add(item{abs: filepath.Join(dir, s.name), target: tname, kind: KindSkill, name: s.name, registry: s.registry, commit: s.commit, hash: s.hash, dir: s.dir})
+		}
+		for _, in := range instructions {
+			place, err := target.InstructionPlace(tname, loc, in.name, in.ins.Scoped())
+			if err != nil {
+				return nil, err
+			}
+			content := target.RenderInstruction(tname, in.registry, in.ins.Paths, in.ins.Body, place.Block)
+			if place.Block {
+				wantBlocks[place.File] = append(wantBlocks[place.File], block{
+					id: in.registry + "/" + in.name, target: tname, name: in.name, registry: in.registry, commit: in.commit, body: string(content),
+				})
 				continue
 			}
-			want[key] = desired{abs: abs, target: tname, name: name, src: w.src, hash: w.hash, registry: w.registry, commit: w.commit}
+			add(item{abs: place.File, target: tname, kind: KindInstruction, name: in.name, registry: in.registry, commit: in.commit, hash: hashBytes(content), content: content})
 		}
 	}
 
-	old := st.ByPath()
-	var entries []state.Entry
-	counts := func(t string) *Counts {
-		if rep.Targets[t] == nil {
-			rep.Targets[t] = &Counts{}
-		}
-		return rep.Targets[t]
+	if err := r.applyItems(want); err != nil {
+		return nil, err
 	}
-
-	keys := make([]string, 0, len(want))
-	for k := range want {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, key := range keys {
-		d := want[key]
-		c := counts(d.target)
-		entry := state.Entry{Path: key, Kind: KindSkill, Name: d.name, Target: d.target, Registry: d.registry, Commit: d.commit, Hash: d.hash}
-		prev, managed := old[key]
-
-		if _, err := os.Lstat(d.abs); os.IsNotExist(err) {
-			if !opts.DryRun {
-				if err := fsutil.ReplaceDir(d.src, d.abs); err != nil {
-					return nil, fmt.Errorf("install %s: %w", d.abs, err)
-				}
-			}
-			c.Installed++
-			entries = append(entries, entry)
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-
-		if !managed {
-			c.Skipped++
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: skipped %q: %s exists and is not managed by spellbook", d.target, d.name, d.abs))
-			continue
-		}
-		onDisk, err := fsutil.HashDir(d.abs)
-		if err != nil {
-			return nil, err
-		}
-		switch {
-		case onDisk == d.hash:
-			c.Unchanged++
-			entries = append(entries, entry)
-		case onDisk != prev.Hash && !opts.Force:
-			c.Skipped++
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: skipped %q: %s was edited locally (use --force to overwrite)", d.target, d.name, d.abs))
-			entries = append(entries, prev)
-		default:
-			if !opts.DryRun {
-				if err := fsutil.ReplaceDir(d.src, d.abs); err != nil {
-					return nil, fmt.Errorf("update %s: %w", d.abs, err)
-				}
-			}
-			c.Updated++
-			entries = append(entries, entry)
-		}
-	}
-
-	// Remove what is no longer wanted.
-	for key, e := range old {
-		if _, keep := want[key]; keep {
-			continue
-		}
-		if failed[e.Registry] {
-			// The registry could not be read, so nothing is known about
-			// what it still offers. Leave its resources alone.
-			entries = append(entries, e)
-			continue
-		}
-		abs := absPath(loc.Root, key)
-		if _, err := os.Lstat(abs); os.IsNotExist(err) {
-			continue
-		}
-		c := counts(e.Target)
-		onDisk, err := fsutil.HashDir(abs)
-		if err != nil {
-			return nil, err
-		}
-		if onDisk != e.Hash && !opts.Force {
-			c.Skipped++
-			rep.Warnings = append(rep.Warnings, fmt.Sprintf("%s: kept %q: %s was edited locally (use --force to remove)", e.Target, e.Name, abs))
-			entries = append(entries, e)
-			continue
-		}
-		if !opts.DryRun {
-			if err := os.RemoveAll(abs); err != nil {
-				return nil, fmt.Errorf("remove %s: %w", abs, err)
-			}
-		}
-		c.Removed++
+	if err := r.applyBlocks(wantBlocks); err != nil {
+		return nil, err
 	}
 
 	if !opts.DryRun {
-		st.Entries = entries
+		st.Entries = r.entries
 		if err := st.Save(loc.StatePath); err != nil {
 			return nil, err
 		}
@@ -315,8 +297,261 @@ func Run(ctx context.Context, loc config.Location, cfg *config.Config, opts Opti
 			return nil, err
 		}
 	}
-	sort.Strings(rep.Warnings)
-	return rep, nil
+	sort.Strings(r.rep.Warnings)
+	return r.rep, nil
+}
+
+// claim reserves the name a resource is installed under and returns it.
+// A name that is already taken by a registry with priority is given up,
+// unless the registry asks for a prefix in that case.
+func (r *run) claim(taken map[string]string, reg config.Registry, kind, name string) (string, bool) {
+	install := name
+	if reg.Prefix == config.PrefixAll {
+		install = reg.Name + "-" + name
+	}
+	if _, clash := taken[install]; clash && reg.Prefix == config.PrefixCollisions {
+		install = reg.Name + "-" + name
+	}
+	if owner, clash := taken[install]; clash {
+		r.warnf("%s: %s %q is also provided by %q, which has priority", reg.Name, kind, install, owner)
+		return "", false
+	}
+	if !config.ValidName(install) {
+		r.warnf("%s: skipped %s %q: the prefixed name %q is not a valid name", reg.Name, kind, name, install)
+		return "", false
+	}
+	taken[install] = reg.Name
+	return install, true
+}
+
+// applyItems installs and updates the wanted files and directories and
+// removes the recorded ones that are no longer wanted.
+func (r *run) applyItems(want map[string]item) error {
+	keys := make([]string, 0, len(want))
+	for k := range want {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		it := want[key]
+		c := r.counts(it.target)
+		entry := state.Entry{Path: key, Kind: it.kind, Name: it.name, Target: it.target, Registry: it.registry, Commit: it.commit, Hash: it.hash}
+		prev, managed := r.old[key]
+
+		if _, err := os.Lstat(it.abs); os.IsNotExist(err) {
+			if !r.opts.DryRun {
+				if err := it.write(); err != nil {
+					return fmt.Errorf("install %s: %w", it.abs, err)
+				}
+			}
+			c.Installed++
+			r.entries = append(r.entries, entry)
+			continue
+		} else if err != nil {
+			return err
+		}
+
+		if !managed {
+			c.Skipped++
+			r.warnf("%s: skipped %s %q: %s exists and is not managed by spellbook", it.target, it.kind, it.name, it.abs)
+			continue
+		}
+		onDisk, err := hashPath(it.abs)
+		if err != nil {
+			return err
+		}
+		switch {
+		case onDisk == it.hash:
+			c.Unchanged++
+			r.entries = append(r.entries, entry)
+		case onDisk != prev.Hash && !r.opts.Force:
+			c.Skipped++
+			r.warnf("%s: skipped %s %q: %s was edited locally (use --force to overwrite)", it.target, it.kind, it.name, it.abs)
+			r.entries = append(r.entries, prev)
+		default:
+			if !r.opts.DryRun {
+				if err := it.write(); err != nil {
+					return fmt.Errorf("update %s: %w", it.abs, err)
+				}
+			}
+			c.Updated++
+			r.entries = append(r.entries, entry)
+		}
+	}
+
+	for key, e := range r.old {
+		if e.Kind == KindBlock {
+			continue
+		}
+		if _, keep := want[key]; keep {
+			continue
+		}
+		if r.failed[e.Registry] {
+			// The registry could not be read, so nothing is known about
+			// what it still offers. Leave its resources alone.
+			r.entries = append(r.entries, e)
+			continue
+		}
+		abs := absPath(r.loc.Root, key)
+		if _, err := os.Lstat(abs); os.IsNotExist(err) {
+			continue
+		}
+		c := r.counts(e.Target)
+		onDisk, err := hashPath(abs)
+		if err != nil {
+			return err
+		}
+		if onDisk != e.Hash && !r.opts.Force {
+			c.Skipped++
+			r.warnf("%s: kept %s %q: %s was edited locally (use --force to remove)", e.Target, e.Kind, e.Name, abs)
+			r.entries = append(r.entries, e)
+			continue
+		}
+		if !r.opts.DryRun {
+			if err := os.RemoveAll(abs); err != nil {
+				return fmt.Errorf("remove %s: %w", abs, err)
+			}
+		}
+		c.Removed++
+	}
+	return nil
+}
+
+// applyBlocks rewrites the marked blocks of every shared file that should
+// have blocks or that has recorded ones. Text outside the blocks, and
+// blocks that are not in the state file, stay as they are.
+func (r *run) applyBlocks(want map[string][]block) error {
+	files := map[string]bool{}
+	for abs := range want {
+		files[abs] = true
+	}
+	for key, e := range r.old {
+		if e.Kind == KindBlock {
+			if i := strings.LastIndex(key, "#"); i >= 0 {
+				files[absPath(r.loc.Root, key[:i])] = true
+			}
+		}
+	}
+	paths := make([]string, 0, len(files))
+	for abs := range files {
+		paths = append(paths, abs)
+	}
+	sort.Strings(paths)
+
+	for _, abs := range paths {
+		fileKey := pathKey(r.loc.Root, abs)
+		data, err := os.ReadFile(abs)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		text := string(data)
+		found, before, after, err := blocks.Parse(text)
+		if err != nil {
+			return fmt.Errorf("%s: %w", abs, err)
+		}
+		onDisk := map[string]string{}
+		for _, b := range found {
+			onDisk[b.ID] = b.Body
+		}
+
+		var out []blocks.Block
+		wanted := map[string]bool{}
+		for _, b := range want[abs] {
+			wanted[b.id] = true
+			key := fileKey + "#" + b.id
+			hash := hashBytes([]byte(b.body))
+			entry := state.Entry{Path: key, Kind: KindBlock, Name: b.name, Target: b.target, Registry: b.registry, Commit: b.commit, Hash: hash}
+			c := r.counts(b.target)
+			prev, managed := r.old[key]
+			body, exists := onDisk[b.id]
+			switch {
+			case !exists:
+				c.Installed++
+			case hashBytes([]byte(body)) == hash:
+				c.Unchanged++
+			case managed && hashBytes([]byte(body)) != prev.Hash && !r.opts.Force:
+				c.Skipped++
+				r.warnf("%s: skipped instruction %q: its block in %s was edited locally (use --force to overwrite)", b.target, b.name, abs)
+				out = append(out, blocks.Block{ID: b.id, Body: body})
+				r.entries = append(r.entries, prev)
+				continue
+			default:
+				c.Updated++
+			}
+			out = append(out, blocks.Block{ID: b.id, Body: b.body})
+			r.entries = append(r.entries, entry)
+		}
+
+		for _, b := range found {
+			if wanted[b.ID] {
+				continue
+			}
+			prev, managed := r.old[fileKey+"#"+b.ID]
+			switch {
+			case !managed:
+				// Not recorded, so not ours to remove.
+				out = append(out, b)
+			case r.failed[prev.Registry]:
+				out = append(out, b)
+				r.entries = append(r.entries, prev)
+			case hashBytes([]byte(b.Body)) != prev.Hash && !r.opts.Force:
+				r.counts(prev.Target).Skipped++
+				r.warnf("%s: kept instruction %q: its block in %s was edited locally (use --force to remove)", prev.Target, prev.Name, abs)
+				out = append(out, b)
+				r.entries = append(r.entries, prev)
+			default:
+				r.counts(prev.Target).Removed++
+			}
+		}
+
+		updated := blocks.Render(out, before, after)
+		if updated == text || r.opts.DryRun {
+			continue
+		}
+		if strings.TrimSpace(updated) == "" {
+			// The file held nothing but blocks, so it goes with them.
+			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		if err := writeFile(abs, []byte(updated)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeFile(path string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".spellbook-tmp"
+	if err := os.WriteFile(tmp, content, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func hashBytes(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// hashPath hashes a directory like fsutil.HashDir and a file by content.
+func hashPath(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return fsutil.HashDir(path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return hashBytes(data), nil
 }
 
 // pathKey returns abs relative to root when it lies inside root, and abs
@@ -334,87 +569,4 @@ func absPath(root, key string) string {
 		return key
 	}
 	return filepath.Join(root, filepath.FromSlash(key))
-}
-
-// Diff describes how one registry changed since the commit in the lock file.
-type Diff struct {
-	Name string
-	// From is the locked commit, empty when the registry was never synced.
-	From string
-	To   string
-	// Added, Removed and Changed name the selected skills that differ.
-	Added, Removed, Changed []string
-	// Patch is the textual difference, filled when it was asked for.
-	Patch string
-}
-
-// HasChanges reports whether the registry offers anything different.
-func (d Diff) HasChanges() bool {
-	return len(d.Added)+len(d.Removed)+len(d.Changed) > 0
-}
-
-// Compare fetches the registry at its locked commit and at its newest one
-// and reports which of the selected skills differ. It changes neither the
-// targets nor the lock file.
-func Compare(ctx context.Context, loc config.Location, r config.Registry, patch bool) (*Diff, error) {
-	lk, err := lock.Load(loc.LockPath)
-	if err != nil {
-		return nil, err
-	}
-	d := &Diff{Name: r.Name}
-	old := map[string]string{}
-	if e, ok := lk.Get(r.Name); ok && e.URL == r.URL {
-		d.From = e.Commit
-		at := r
-		at.Ref = e.Commit
-		snap, err := registry.Fetch(ctx, at)
-		if err != nil {
-			return nil, fmt.Errorf("fetch locked commit: %w", err)
-		}
-		if old, err = hashes(snap); err != nil {
-			return nil, err
-		}
-	}
-	snap, err := registry.Fetch(ctx, r)
-	if err != nil {
-		return nil, err
-	}
-	d.To = snap.Commit
-	cur, err := hashes(snap)
-	if err != nil {
-		return nil, err
-	}
-	for name, h := range cur {
-		if prev, ok := old[name]; !ok {
-			d.Added = append(d.Added, name)
-		} else if prev != h {
-			d.Changed = append(d.Changed, name)
-		}
-	}
-	for name := range old {
-		if _, ok := cur[name]; !ok {
-			d.Removed = append(d.Removed, name)
-		}
-	}
-	sort.Strings(d.Added)
-	sort.Strings(d.Removed)
-	sort.Strings(d.Changed)
-	if patch && d.From != "" && d.From != d.To {
-		if d.Patch, err = gitx.Diff(ctx, snap.Dir, d.From, d.To, r.Path, false); err != nil {
-			return nil, err
-		}
-	}
-	return d, nil
-}
-
-func hashes(snap *registry.Snapshot) (map[string]string, error) {
-	m := map[string]string{}
-	for _, s := range snap.Skills {
-		h, err := fsutil.HashDir(s.Dir)
-		if err != nil {
-			return nil, err
-		}
-		m[s.Name] = h
-	}
-	return m, nil
 }

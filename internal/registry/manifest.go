@@ -23,6 +23,8 @@ type Group struct {
 	// Include names other groups whose resources this group also contains.
 	Include []string `toml:"include,omitempty"`
 	Skills  []string `toml:"skills,omitempty"`
+	// Instructions are listed in the order they should be read in.
+	Instructions []string `toml:"instructions,omitempty"`
 }
 
 // Manifest is the content of a registry.toml file.
@@ -93,9 +95,21 @@ func (m *Manifest) GroupNames() []string {
 }
 
 // Skills returns the skill names of the given groups, including those of
-// the groups they include, without duplicates and in a stable order.
+// the groups they include, without duplicates.
 func (m *Manifest) Skills(groups []string) ([]string, error) {
-	set := map[string]bool{}
+	return m.resolve(groups, func(g Group) []string { return g.Skills })
+}
+
+// Instructions returns the instruction names of the given groups. An
+// included group comes before the group that includes it, so the general
+// guidance of a base group precedes a team's own.
+func (m *Manifest) Instructions(groups []string) ([]string, error) {
+	return m.resolve(groups, func(g Group) []string { return g.Instructions })
+}
+
+func (m *Manifest) resolve(groups []string, field func(Group) []string) ([]string, error) {
+	var names []string
+	seen := map[string]bool{}
 	done := map[string]bool{}
 	var visit func(name string, trail []string) error
 	visit = func(name string, trail []string) error {
@@ -116,8 +130,11 @@ func (m *Manifest) Skills(groups []string) ([]string, error) {
 				return err
 			}
 		}
-		for _, s := range g.Skills {
-			set[s] = true
+		for _, n := range field(g) {
+			if !seen[n] {
+				seen[n] = true
+				names = append(names, n)
+			}
 		}
 		done[name] = true
 		return nil
@@ -127,10 +144,5 @@ func (m *Manifest) Skills(groups []string) ([]string, error) {
 			return nil, err
 		}
 	}
-	names := make([]string, 0, len(set))
-	for n := range set {
-		names = append(names, n)
-	}
-	sort.Strings(names)
 	return names, nil
 }

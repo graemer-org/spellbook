@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 
 	"github.com/BurntSushi/toml"
@@ -61,9 +62,25 @@ type Registry struct {
 	Groups []string `toml:"groups,omitempty"`
 	// Skills limits the registry to the named skills. Empty means all.
 	Skills []string `toml:"skills,omitempty"`
+	// Only limits the registry to some kinds of resources. Empty means all.
+	Only []string `toml:"only,omitempty"`
 	// Prefix puts the registry name in front of installed names:
 	// PrefixAll always, PrefixCollisions only when the plain name is taken.
 	Prefix string `toml:"prefix,omitempty"`
+}
+
+// Kinds of resources a registry can provide, as used in Registry.Only.
+const (
+	KindSkills       = "skills"
+	KindInstructions = "instructions"
+)
+
+// Kinds lists the valid values of Registry.Only.
+var Kinds = []string{KindSkills, KindInstructions}
+
+// Wants reports whether the subscriber wants resources of the given kind.
+func (r Registry) Wants(kind string) bool {
+	return len(r.Only) == 0 || slices.Contains(r.Only, kind)
 }
 
 // Values of Registry.Prefix.
@@ -214,6 +231,11 @@ func (c *Config) Validate() error {
 		seen[r.Name] = true
 		if r.URL == "" {
 			return fmt.Errorf("registry %q has no url", r.Name)
+		}
+		for _, k := range r.Only {
+			if !slices.Contains(Kinds, k) {
+				return fmt.Errorf("registry %q: only must name kinds from %v, not %q", r.Name, Kinds, k)
+			}
 		}
 		switch r.Prefix {
 		case PrefixNone, PrefixAll, PrefixCollisions:

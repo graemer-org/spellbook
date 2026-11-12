@@ -166,7 +166,7 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 				return err
 			}
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Added registry %s (%d skills at %s)\n", reg.Name, len(snap.Skills), short(snap.Commit))
+			fmt.Fprintf(out, "Added registry %s (%d skills, %d instructions at %s)\n", reg.Name, len(snap.Skills), len(snap.Instructions), short(snap.Commit))
 			if noSync {
 				return nil
 			}
@@ -178,7 +178,8 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	add.Flags().IntVar(&reg.Priority, "priority", 0, "the registry with the higher number wins a name collision")
 	add.Flags().StringSliceVar(&reg.Groups, "group", nil, "group of the registry to join; repeatable (default: the registry's default groups)")
 	add.Flags().StringSliceVar(&reg.Skills, "skill", nil, "only install this skill; repeatable")
-	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of skill names: 'all', or 'collisions' for taken names only")
+	add.Flags().StringSliceVar(&reg.Only, "only", nil, "only install this kind of resource: skills, instructions; repeatable")
+	add.Flags().StringVar(&reg.Prefix, "prefix", "", "put the registry name in front of installed names: 'all', or 'collisions' for taken names only")
 	add.Flags().BoolVar(&noSync, "no-sync", false, "add the registry without syncing")
 
 	list := &cobra.Command{
@@ -258,7 +259,8 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 			}
 			files := map[string]string{
 				manifest: setupManifest,
-				filepath.Join(dir, "skills", "example", registry.SkillFile): setupSkill,
+				filepath.Join(dir, "skills", "example", registry.SkillFile):    setupSkill,
+				filepath.Join(dir, registry.InstructionsDir, "conventions.md"): setupInstruction,
 			}
 			for path, content := range files {
 				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -288,6 +290,7 @@ default_groups = ["base"]
 [groups.base]
 description = "For everyone"
 skills = ["example"]
+instructions = ["conventions"]
 
 # A team group that also contains everything from base:
 #
@@ -295,6 +298,19 @@ skills = ["example"]
 # description = "Platform team"
 # include = ["base"]
 # skills = ["terraform-review"]
+# instructions = ["terraform-style"]
+`
+
+const setupInstruction = `---
+description: Replace this with what the instruction is about.
+# Add globs to apply it only to matching files:
+# paths:
+#   - "src/**/*.ts"
+---
+
+# Conventions
+
+Write the standing guidance for the agent here.
 `
 
 const setupSkill = `---
@@ -344,7 +360,7 @@ func newGroup(locate func() (config.Location, error)) *cobra.Command {
 				joined[g] = true
 			}
 			w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "GROUP\tJOINED\tINCLUDES\tSKILLS\tDESCRIPTION")
+			fmt.Fprintln(w, "GROUP\tJOINED\tINCLUDES\tSKILLS\tINSTRUCTIONS\tDESCRIPTION")
 			for _, name := range snap.Manifest.GroupNames() {
 				g := snap.Manifest.Groups[name]
 				state := "-"
@@ -358,7 +374,11 @@ func newGroup(locate func() (config.Location, error)) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\n", name, state, dash(strings.Join(g.Include, ",")), len(skills), dash(g.Description))
+				instructions, err := snap.Manifest.Instructions([]string{name})
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%d\t%s\n", name, state, dash(strings.Join(g.Include, ",")), len(skills), len(instructions), dash(g.Description))
 			}
 			return w.Flush()
 		},
@@ -541,7 +561,7 @@ func newSync(locate func() (config.Location, error)) *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVarP(&opts.DryRun, "dry-run", "n", false, "show what would change without writing anything")
-	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite and remove skills that were edited locally")
+	cmd.Flags().BoolVar(&opts.Force, "force", false, "overwrite and remove resources that were edited locally")
 	cmd.Flags().BoolVar(&opts.Locked, "locked", false, "install the commits recorded in spellbook.lock instead of the newest ones")
 	return cmd
 }
@@ -567,7 +587,7 @@ func runSync(cmd *cobra.Command, loc config.Location, cfg *config.Config, opts s
 		if r.Previous != "" && r.Previous != r.Commit {
 			was = fmt.Sprintf(" (was %s)", short(r.Previous))
 		}
-		fmt.Fprintf(out, "%-12s %d skills at %s%s\n", r.Name, r.Skills, short(r.Commit), was)
+		fmt.Fprintf(out, "%-12s %d skills, %d instructions at %s%s\n", r.Name, r.Skills, r.Instructions, short(r.Commit), was)
 	}
 	names := make([]string, 0, len(rep.Targets))
 	for n := range rep.Targets {
