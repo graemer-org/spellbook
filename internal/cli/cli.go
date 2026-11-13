@@ -1494,10 +1494,14 @@ func size(n int) string {
 }
 
 func newList(locate func() (config.Location, error)) *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List what spellbook installed",
-		Args:  cobra.NoArgs,
+		Long: `List what spellbook installed, one line per resource with the tools it
+was installed for. With --all, list every file or entry that was written,
+one line per tool, with its path.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			loc, err := locate()
 			if err != nil {
@@ -1518,18 +1522,53 @@ func newList(locate func() (config.Location, error)) *cobra.Command {
 				}
 				return entries[i].Target < entries[j].Target
 			})
-			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tKIND\tTARGET\tREGISTRY\tCOMMIT\tPATH")
-			for _, e := range entries {
-				commit := short(e.Commit)
+			commitOf := func(e state.Entry) string {
 				if e.Pending {
-					commit = "pushed"
+					return "pushed"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, e.Kind, e.Target, e.Registry, commit, e.Path)
+				return short(e.Commit)
+			}
+			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
+			if all {
+				fmt.Fprintln(w, "NAME\tKIND\tTARGET\tREGISTRY\tCOMMIT\tPATH")
+				for _, e := range entries {
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", e.Name, e.Kind, e.Target, e.Registry, commitOf(e), e.Path)
+				}
+				return w.Flush()
+			}
+			// One resource is written once per tool, and some kinds in
+			// more than one place per tool. That is one line here.
+			type row struct {
+				name, kind, registry string
+				targets, commits     []string
+			}
+			var rows []*row
+			index := map[string]*row{}
+			for _, e := range entries {
+				kind, _, _ := strings.Cut(e.Kind, "-")
+				key := e.Name + "\x00" + kind + "\x00" + e.Registry
+				r := index[key]
+				if r == nil {
+					r = &row{name: e.Name, kind: kind, registry: e.Registry}
+					index[key] = r
+					rows = append(rows, r)
+				}
+				if !slices.Contains(r.targets, e.Target) {
+					r.targets = append(r.targets, e.Target)
+				}
+				if c := commitOf(e); !slices.Contains(r.commits, c) {
+					r.commits = append(r.commits, c)
+				}
+			}
+			fmt.Fprintln(w, "NAME\tKIND\tTARGETS\tREGISTRY\tCOMMIT")
+			for _, r := range rows {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", r.name, r.kind, strings.Join(r.targets, ","), r.registry, strings.Join(r.commits, ","))
 			}
 			return w.Flush()
 		},
 	}
+	cmd.Flags().BoolVarP(&all, "all", "a", false, "one line per tool and place, with the path")
+	return cmd
 }
 
 // removeCheckout deletes the cached clone of a registry. The cache is only

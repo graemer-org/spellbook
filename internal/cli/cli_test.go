@@ -1710,3 +1710,19 @@ func TestInitEnablesTheToolsThatAreInstalled(t *testing.T) {
 		t.Errorf("fallback should enable claude and copilot:\n%s", cfg)
 	}
 }
+
+func TestListShowsOneLinePerResourceUnlessAllIsGiven(t *testing.T) {
+	e := newEnv(t)
+	repo := e.repo(map[string]string{"skills/review": "v1"})
+	e.mustRun("init", "--target", "claude", "--target", "copilot")
+	e.mustRun("registry", "add", "acme", repo)
+
+	out := e.mustRun("list")
+	if strings.Count(out, "review") != 1 || !strings.Contains(out, "claude,copilot") || strings.Contains(out, "PATH") {
+		t.Errorf("expected one line for both tools:\n%s", out)
+	}
+	out = e.mustRun("list", "--all")
+	if strings.Count(out, "\nreview") != 2 || !strings.Contains(out, filepath.Join(".claude", "skills", "review")) {
+		t.Errorf("expected one line per tool with its path:\n%s", out)
+	}
+}

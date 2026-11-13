@@ -149,7 +149,7 @@ version of a clashing skill is installed as well, as `mine-<name>`. Give
 Useful along the way:
 
 ```sh
-spellbook list      # what is installed, and from where
+spellbook list      # what is installed, and from where (--all: every file)
 spellbook diff      # what changed upstream since the last sync
 spellbook sync      # update now
 spellbook doctor    # check the setup
@@ -729,7 +729,7 @@ spellbook group leave <registry> <group>...
 spellbook sync [--dry-run] [--force] [--locked] [--check]
 spellbook diff [registry] [--patch]
 spellbook push [<path> | <kind> <name>]... [--to <registry>] [--group <group>] [--pr]
-spellbook list
+spellbook list [--all]
 
 spellbook autosync enable|disable|status
 spellbook doctor [--offline]

@@ -448,10 +448,10 @@ copilot      7 installed, 0 updated, 0 unchanged, 0 removed, 0 skipped</span></p
 
 <span class="c"># see what is installed, and from which registry</span>
 <span class="p">$ </span>spellbook list
-<span class="o">NAME              KIND   TARGET  REGISTRY
-code-review       skill  claude  acme
-mine-code-review  skill  claude  mine
-standup-notes     skill  claude  mine</span>
+<span class="o">NAME              KIND   TARGETS         REGISTRY
+code-review       skill  claude,copilot  acme
+mine-code-review  skill  claude,copilot  mine
+standup-notes     skill  claude,copilot  mine</span>
 
 <span class="p">$ </span>spellbook autosync enable</pre>
       </div>
