@@ -2,28 +2,28 @@
 class Spellbook < Formula
   desc "Share AI skills, instructions, agents and MCP servers from git registries"
   homepage "https://github.com/graemer-org/spellbook"
-  version "0.3.0"
+  version "0.4.0"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
-      url "https://github.com/graemer-org/spellbook/releases/download/v0.3.0/spellbook_0.3.0_darwin_arm64.tar.gz"
-      sha256 "bce9e590d71426474d2290e0057a8dcd6298ce52f30e62985304c65f57f6f4bf"
+      url "https://github.com/graemer-org/spellbook/releases/download/v0.4.0/spellbook_0.4.0_darwin_arm64.tar.gz"
+      sha256 "abc8b1e14bf2459b5c692d3cec062d070f608291247494807760d0cfe3ea7ff9"
     end
     on_intel do
-      url "https://github.com/graemer-org/spellbook/releases/download/v0.3.0/spellbook_0.3.0_darwin_amd64.tar.gz"
-      sha256 "6687634b6b08cb527c4dc95f3ac03291f2c8ea86721c184279ec57634b65fd4e"
+      url "https://github.com/graemer-org/spellbook/releases/download/v0.4.0/spellbook_0.4.0_darwin_amd64.tar.gz"
+      sha256 "f16bc68d6be574bb728e3e8c5233c17153cb47042f59693b39797800e0da534c"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/graemer-org/spellbook/releases/download/v0.3.0/spellbook_0.3.0_linux_arm64.tar.gz"
-      sha256 "4699f697bea42046f094c725aa5b644314509b2e4b01960b45c2f0b23981ca92"
+      url "https://github.com/graemer-org/spellbook/releases/download/v0.4.0/spellbook_0.4.0_linux_arm64.tar.gz"
+      sha256 "4653d7b5ac6a3332fa9327cf4da5c7471bc198658c8017e06b479d43fa870378"
     end
     on_intel do
-      url "https://github.com/graemer-org/spellbook/releases/download/v0.3.0/spellbook_0.3.0_linux_amd64.tar.gz"
-      sha256 "3b389d76e89fed022866dc41436d39308359e0720635e597e2d49aeefbbf210c"
+      url "https://github.com/graemer-org/spellbook/releases/download/v0.4.0/spellbook_0.4.0_linux_amd64.tar.gz"
+      sha256 "f88ae9ff861bfa559d0bd994f6156f97c0ae062bbbec414a48f391ff805453f7"
     end
   end
 
