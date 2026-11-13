@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/graemer-org/spellbook/compare/v0.2.1...v0.3.0) (2026-11-13)
+
+
+### Features
+
+* a registry can import resources from other repositories ([99fd7f6](https://github.com/graemer-org/spellbook/commit/99fd7f610f0ea8a4ae270b5bf38fb19f62668b3c))
+
 ## [0.2.1](https://github.com/graemer-org/spellbook/compare/v0.2.0...v0.2.1) (2026-11-13)
 
 
