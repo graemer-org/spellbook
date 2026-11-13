@@ -33,6 +33,9 @@ type Instruction struct {
 	Body  string
 	// File is where the instruction lives, relative to the registry root.
 	File string
+	// Imported is the URL of the repository the registry imports this
+	// from, and empty for the registry's own.
+	Imported string
 }
 
 // Scoped reports whether the instruction is limited to certain paths.

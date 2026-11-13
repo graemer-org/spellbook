@@ -124,6 +124,12 @@ go vet ./... && gofmt -l .    # must be clean before committing
   copy of an agent holds only that tool's settings. `push.Reconcile` takes
   the other tools' sections, and a description a tool does not store, from
   the registry's version.
+- **Imports never bring guarded kinds.** A registry's `[[import]]` takes
+  skills, instructions, agents and prompts from another repository, one
+  level deep. MCP servers and hooks are not imported, because `allow` is
+  given to one repository. The registry's own resource wins over an
+  imported one of the same name, a failed import fails the registry, and
+  push refuses to change an imported resource.
 - **`doctor` reports, it never repairs.** It changes nothing, says for
   every finding what the user can do, and fails only for what stops
   Spellbook from working (git, configuration, an unreachable registry).

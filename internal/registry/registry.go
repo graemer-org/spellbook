@@ -28,6 +28,9 @@ type Skill struct {
 	Name string
 	// Dir is the absolute directory that holds SKILL.md.
 	Dir string
+	// Imported is the URL of the repository the registry imports the
+	// skill from, and empty for the registry's own.
+	Imported string
 }
 
 // Snapshot is the fetched state of one registry.
@@ -93,8 +96,40 @@ func CheckoutDir(r config.Registry) (string, error) {
 	return filepath.Join(root, "registries", r.Name+"-"+hex.EncodeToString(sum[:4])), nil
 }
 
-// Fetch updates the checkout of r and lists what it offers.
+// Fetch updates the checkout of r and lists what it offers, including what
+// the registry imports from other repositories.
 func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
+	return fetch(ctx, r, true)
+}
+
+// importable are the kinds a registry can take from another repository.
+var importable = []string{config.KindSkills, config.KindInstructions, config.KindAgents, config.KindPrompts}
+
+// fetchImport fetches what one import of r's manifest names. The imported
+// repository is read like a registry limited to those names. Its own
+// groups and imports are not followed.
+func fetchImport(ctx context.Context, r config.Registry, imp Import) (*Snapshot, error) {
+	sub := config.Registry{
+		Name: r.Name, URL: imp.URL, Ref: imp.Ref, Path: imp.Path,
+		Skills: imp.Skills, Instructions: imp.Instructions, Agents: imp.Agents, Prompts: imp.Prompts,
+	}
+	named := map[string]bool{
+		config.KindSkills: len(imp.Skills) > 0, config.KindInstructions: len(imp.Instructions) > 0,
+		config.KindAgents: len(imp.Agents) > 0, config.KindPrompts: len(imp.Prompts) > 0,
+	}
+	any := named[config.KindSkills] || named[config.KindInstructions] || named[config.KindAgents] || named[config.KindPrompts]
+	for _, kind := range importable {
+		if r.Wants(kind) && (!any || named[kind]) {
+			sub.Only = append(sub.Only, kind)
+		}
+	}
+	if len(sub.Only) == 0 {
+		return &Snapshot{Registry: sub}, nil
+	}
+	return fetch(ctx, sub, false)
+}
+
+func fetch(ctx context.Context, r config.Registry, top bool) (*Snapshot, error) {
 	dir, err := CheckoutDir(r)
 	if err != nil {
 		return nil, err
@@ -143,6 +178,57 @@ func Fetch(ctx context.Context, r config.Registry) (*Snapshot, error) {
 			return nil, err
 		}
 		warnings = append(warnings, w...)
+	}
+
+	if manifest != nil && !top {
+		if len(manifest.Imports) > 0 {
+			warnings = append(warnings, "its own imports are not followed")
+		}
+		// Groups sort a registry for its subscribers. An import names what
+		// it wants itself.
+		manifest = nil
+	}
+	if manifest != nil {
+		for _, imp := range manifest.Imports {
+			sub, err := fetchImport(ctx, r, imp)
+			if err != nil {
+				return nil, fmt.Errorf("import %s: %w", imp.URL, err)
+			}
+			for _, w := range sub.Warnings {
+				warnings = append(warnings, fmt.Sprintf("import %s: %s", imp.URL, w))
+			}
+			own := "import %s: %s %q is also in the registry itself or in an earlier import; that one is used"
+			for _, s := range sub.Skills {
+				if slices.ContainsFunc(all, func(x Skill) bool { return x.Name == s.Name }) {
+					warnings = append(warnings, fmt.Sprintf(own, imp.URL, "skill", s.Name))
+					continue
+				}
+				s.Imported = imp.URL
+				all = append(all, s)
+			}
+			for _, i := range sub.Instructions {
+				if slices.ContainsFunc(instructions, func(x Instruction) bool { return x.Name == i.Name }) {
+					warnings = append(warnings, fmt.Sprintf(own, imp.URL, "instruction", i.Name))
+					continue
+				}
+				i.Imported = imp.URL
+				instructions = append(instructions, i)
+			}
+			merge := func(into []Doc, from []Doc, kind string) []Doc {
+				for _, d := range from {
+					if slices.ContainsFunc(into, func(x Doc) bool { return x.Name == d.Name }) {
+						warnings = append(warnings, fmt.Sprintf(own, imp.URL, kind, d.Name))
+						continue
+					}
+					d.Imported = imp.URL
+					into = append(into, d)
+				}
+				return into
+			}
+			agents = merge(agents, sub.Agents, "agent")
+			prompts = merge(prompts, sub.Prompts, "prompt")
+		}
+		sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
 	}
 
 	snap := &Snapshot{Registry: r, Commit: commit, Dir: dir, Root: root, Manifest: manifest, All: all, AllInstructions: instructions, AllAgents: agents, AllPrompts: prompts}

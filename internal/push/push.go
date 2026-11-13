@@ -577,6 +577,9 @@ func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
 		if name == "" {
 			return nil
 		}
+		if orig.Imported != "" {
+			return fmt.Errorf("the registry imports skill %q from %s; propose the change there", name, orig.Imported)
+		}
 		rel, err := filepath.Rel(snap.Root, orig.Dir)
 		if err != nil {
 			return err
@@ -601,6 +604,9 @@ func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
 			return nil
 		}
 		orig := snap.AllInstructions[i]
+		if orig.Imported != "" {
+			return fmt.Errorf("the registry imports instruction %q from %s; propose the change there", orig.Name, orig.Imported)
+		}
 		local, err := registry.ParseInstruction(it.Name, string(it.Files[0].Data))
 		if err != nil {
 			return err
@@ -627,6 +633,9 @@ func Reconcile(snap *registry.Snapshot, regName string, it *Item) error {
 			return nil
 		}
 		orig := docs[i]
+		if orig.Imported != "" {
+			return fmt.Errorf("the registry imports %s %q from %s; propose the change there", it.Kind, orig.Name, orig.Imported)
+		}
 		local, err := registry.ParseDoc(it.Name, string(it.Files[0].Data))
 		if err != nil {
 			return err

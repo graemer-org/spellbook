@@ -439,7 +439,7 @@ Any git repository works as a registry.
 
 ```
 ai-registry/
-├── registry.toml                  # optional: groups
+├── registry.toml                  # optional: groups, imports
 ├── instructions/
 │   ├── company-standards.md
 │   └── terraform-style.md
@@ -656,6 +656,44 @@ hooks = ["no-force-push"]
 - `include` pulls in everything from another group.
 - `spellbook group join acme platform` adds a group to the ones you already
   have, `group leave` removes one, and `group list acme` shows what exists.
+
+### Importing from other repositories
+
+A registry can take resources from other repositories, so its subscribers
+get them without subscribing to those repositories themselves. Use it
+instead of copying a skill: the copy would never see an update.
+
+```toml
+# registry.toml
+version = 1
+
+[[import]]
+url = "https://github.com/mattpocock/skills.git"
+ref = "5863806"            # a commit or tag; without it, the default branch
+skills = ["grill-me"]
+```
+
+- **What is imported.** With `skills`, `instructions`, `agents` or
+  `prompts`, only what is named. Without any of them, everything of those
+  four kinds. `path` limits the import to a subdirectory.
+- **MCP servers and hooks are never imported.** They run programs, and a
+  subscriber's `allow` is given to your repository, not to the ones it
+  points at.
+- **Pin it.** With a `ref` that is a commit or a tag, what your registry
+  offers only changes when you commit to it. Without one, the import
+  follows the other repository, and `spellbook.lock` and `spellbook diff`
+  do not see that change, because they record your registry's commit.
+- **Imported resources behave like your own.** They can be listed in
+  groups, and subscribers can select them by name. With groups, an
+  imported resource is installed only once a group lists it.
+- **Your own wins.** If the registry itself has a resource of the same
+  kind and name, the import of it is skipped with a warning.
+- **One level.** The imports of an imported repository are not followed,
+  and its groups do not apply.
+- **An import that cannot be fetched fails the registry.** Nothing is
+  removed, and the sync exits non-zero.
+- **`spellbook push` does not change imported resources.** It names the
+  repository the change belongs in.
 
 ### Name collisions
 

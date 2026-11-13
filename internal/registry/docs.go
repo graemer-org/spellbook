@@ -31,7 +31,10 @@ type Doc struct {
 	Body  string
 	// File is where the file lives, relative to the registry root.
 	File string
-	raw  string
+	// Imported is the URL of the repository the registry imports this
+	// from, and empty for the registry's own.
+	Imported string
+	raw      string
 }
 
 // Hash identifies the content of the file.

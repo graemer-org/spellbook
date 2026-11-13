@@ -28,6 +28,10 @@ a registry deserves the same trust as code you run.
   only for a registry you allowed with `spellbook registry allow <name>
   mcp` or `hooks`. Publishing one in a registry does not install it
   anywhere.
+- **A registry can import from other repositories.** Subscribing to it
+  means trusting what it imports as well. Imports bring skills,
+  instructions, agents and prompts only, never MCP servers or hooks, and
+  only one level deep.
 - **Pin what must not change unnoticed.** `--ref` follows a tag or a commit
   instead of a branch, and `spellbook.lock` records the exact commit of
   every sync.

@@ -31,12 +31,34 @@ type Group struct {
 	Hooks        []string `toml:"hooks,omitempty"`
 }
 
+// Import takes resources of another repository into the registry, so its
+// subscribers get them without subscribing to that repository themselves.
+// MCP servers and hooks cannot be imported: they run programs, and a
+// subscriber's permission is given to one repository, not to the ones it
+// points at.
+type Import struct {
+	URL string `toml:"url"`
+	// Ref is a branch, tag or commit. A commit or tag keeps the registry's
+	// content from changing without a commit to the registry itself.
+	Ref string `toml:"ref,omitempty"`
+	// Path limits the import to a subdirectory of that repository.
+	Path string `toml:"path,omitempty"`
+	// The lists name what to import. When all are empty, every skill,
+	// instruction, agent and prompt is imported; otherwise only what is
+	// named.
+	Skills       []string `toml:"skills,omitempty"`
+	Instructions []string `toml:"instructions,omitempty"`
+	Agents       []string `toml:"agents,omitempty"`
+	Prompts      []string `toml:"prompts,omitempty"`
+}
+
 // Manifest is the content of a registry.toml file.
 type Manifest struct {
 	Version int `toml:"version"`
 	// DefaultGroups is what a subscriber gets who did not choose a group.
 	DefaultGroups []string         `toml:"default_groups,omitempty"`
 	Groups        map[string]Group `toml:"groups,omitempty"`
+	Imports       []Import         `toml:"import,omitempty"`
 }
 
 // LoadManifest reads registry.toml from dir. It returns nil when the
@@ -63,6 +85,11 @@ func LoadManifest(dir string) (*Manifest, []string, error) {
 	var warnings []string
 	for _, key := range md.Undecoded() {
 		warnings = append(warnings, fmt.Sprintf("%s: ignored unknown key %q", ManifestFile, key.String()))
+	}
+	for i, imp := range m.Imports {
+		if imp.URL == "" {
+			return nil, nil, fmt.Errorf("%s: import %d has no url", ManifestFile, i+1)
+		}
 	}
 	for name, g := range m.Groups {
 		if !config.ValidName(name) {
