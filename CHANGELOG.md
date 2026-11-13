@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/graemer-org/spellbook/compare/v0.3.0...v0.4.0) (2026-11-13)
+
+
+### Features
+
+* list shows one line per resource ([9076a4d](https://github.com/graemer-org/spellbook/commit/9076a4d7f8c5ad5dbb2d8ae7f37cde7c5a72dad0))
+
 ## [0.3.0](https://github.com/graemer-org/spellbook/compare/v0.2.1...v0.3.0) (2026-11-13)
 
 
