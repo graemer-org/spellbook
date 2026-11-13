@@ -73,6 +73,13 @@ brew tap graemer-org/spellbook https://github.com/graemer-org/spellbook
 brew install spellbook
 ```
 
+With [mise](https://mise.jdx.dev), which takes the archive from the latest
+release:
+
+```sh
+mise use -g github:graemer-org/spellbook
+```
+
 With Go:
 
 ```sh
