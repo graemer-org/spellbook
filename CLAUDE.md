@@ -201,8 +201,10 @@ the next version and the changelog from them: `feat:` (minor), `fix:`
 
 `.github/workflows/release.yml` runs release-please on every push to
 `main`. It maintains a release pull request; merging it creates the tag and
-the GitHub release, and the `publish` job then runs `scripts/release.sh`,
-uploads the archives and commits `Formula/spellbook.rb` to `main`.
+a draft of the GitHub release, and the `publish` job then runs
+`scripts/release.sh`, uploads the archives, publishes the release and
+commits `Formula/spellbook.rb` to `main`. The release stays a draft until
+the archives are attached, because a published release is immutable.
 
 - Never create tags or releases by hand, and never edit `CHANGELOG.md`,
   `.release-please-manifest.json` or `Formula/spellbook.rb`: all three are
