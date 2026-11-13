@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/graemer-org/spellbook/compare/v0.2.0...v0.2.1) (2026-11-13)
+
+
+### Bug Fixes
+
+* attach the archives before a release is published ([d0eb130](https://github.com/graemer-org/spellbook/commit/d0eb13043d32eb699463ec030401f855f99ebc48))
+
 ## [0.2.0](https://github.com/graemer-org/spellbook/compare/v0.1.0...v0.2.0) (2026-11-12)
 
 
