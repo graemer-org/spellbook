@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/graemer-org/spellbook/compare/v0.4.0...v0.5.0) (2026-11-21)
+
+
+### Features
+
+* registry imports shows and moves pins that are behind ([589c5fa](https://github.com/graemer-org/spellbook/commit/589c5fa0fa8287b3183a7b1ca1f5ca46da095895))
+
 ## [0.4.0](https://github.com/graemer-org/spellbook/compare/v0.3.0...v0.4.0) (2026-11-13)
 
 
