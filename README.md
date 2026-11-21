@@ -700,8 +700,9 @@ skills = ["grill-me"]
   count. `--update` writes that commit into `registry.toml` and leaves the
   rest of the file as it is, for you to review and commit. An import that
   would lose something it brings today is reported and never moved.
-  `--check` changes nothing and fails when an import is outdated, for a
-  scheduled workflow that tells you.
+  `--check` changes nothing and fails when an import is outdated. A
+  scheduled workflow can do this for you, see
+  [Updating imports automatically](#updating-imports-automatically).
 - **Imported resources behave like your own.** They can be listed in
   groups, and subscribers can select them by name. With groups, an
   imported resource is installed only once a group lists it.
@@ -713,6 +714,79 @@ skills = ["grill-me"]
   removed, and the sync exits non-zero.
 - **`spellbook push` does not change imported resources.** It names the
   repository the change belongs in.
+
+### Updating imports automatically
+
+A pinned import only moves when someone moves it. To hear about a change
+without looking, let a scheduled workflow in the registry's repository run
+`spellbook registry imports --update` and open a pull request with the
+result. Save this as `.github/workflows/imports.yml`:
+
+```yaml
+name: Imports
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: spellbook/update-imports
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: false
+      - name: Install Spellbook
+        env:
+          GOPROXY: direct
+        run: go install github.com/graemer-org/spellbook/cmd/spellbook@latest
+      - name: Move outdated imports
+        shell: bash
+        run: spellbook registry imports --update | tee "$RUNNER_TEMP/imports.txt"
+      - name: Open or update the pull request
+        shell: bash
+        run: |
+          git diff --quiet -- registry.toml && exit 0
+          { echo '```'; cat "$RUNNER_TEMP/imports.txt"; echo '```'; } > "$RUNNER_TEMP/body.md"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --quiet -B "$BRANCH"
+          git commit --quiet -m "chore: move imports to their newest commits" -- registry.toml
+          git push --quiet --force origin "$BRANCH"
+          number=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --head "$BRANCH" --title "Move imports to their newest commits" --body-file "$RUNNER_TEMP/body.md"
+          fi
+      - name: Fail for an import that could not be moved
+        run: spellbook registry imports --check
+```
+
+- **What you get.** A pull request whose description is the command's
+  report: which imports moved and which resources are new (`+`), changed
+  (`~`) or gone (`-`). Nothing reaches subscribers until you merge it. A
+  later run updates the same pull request.
+- **When it fails.** The run fails when an import cannot be reached, and
+  when an import is outdated but cannot be moved because the newest commit
+  no longer has something it brings today. GitHub then notifies you about
+  the failed run.
+- **One setting.** A workflow may only open pull requests when the
+  repository allows it: Settings, Actions, General, "Allow GitHub Actions
+  to create and approve pull requests". Without it, `gh pr create` fails
+  after the branch was pushed.
+  [pgraemer/skills](https://github.com/pgraemer/skills/blob/main/.github/workflows/imports.yml)
+  has a variant that opens an issue with a link to the branch instead.
 
 ### Name collisions
 
