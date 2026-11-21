@@ -683,6 +683,25 @@ skills = ["grill-me"]
   offers only changes when you commit to it. Without one, the import
   follows the other repository, and `spellbook.lock` and `spellbook diff`
   do not see that change, because they record your registry's commit.
+- **See when a pin is behind.** `spellbook registry imports` compares
+  every import with the repository it takes from:
+
+  ```console
+  $ spellbook registry imports
+  https://github.com/mattpocock/skills.git: 5863806 -> abeeaf9
+    ~ grill-me
+  https://github.com/cloudflare/security-audit-skill.git: up to date at c1c8a8c
+  https://github.com/vercel-labs/agent-browser.git: up to date at b06e253, newer commits change nothing of it
+  Run again with --update to move the outdated imports to the newest commit.
+  ```
+
+  A pinned import is outdated when what it brings differs at the newest
+  commit of the default branch; commits that touch nothing of it do not
+  count. `--update` writes that commit into `registry.toml` and leaves the
+  rest of the file as it is, for you to review and commit. An import that
+  would lose something it brings today is reported and never moved.
+  `--check` changes nothing and fails when an import is outdated, for a
+  scheduled workflow that tells you.
 - **Imported resources behave like your own.** They can be listed in
   groups, and subscribers can select them by name. With groups, an
   imported resource is installed only once a group lists it.
@@ -719,6 +738,7 @@ spellbook registry set <name> [--url <git-url>] [settings]
 spellbook registry list
 spellbook registry remove <name> [--force]
 spellbook registry setup <directory>
+spellbook registry imports [directory] [--update | --check]
 spellbook registry allow <name> mcp|hooks...
 spellbook registry disallow <name> mcp|hooks...
 

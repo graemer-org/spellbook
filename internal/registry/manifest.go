@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -113,6 +116,61 @@ func LoadManifest(dir string) (*Manifest, []string, error) {
 		}
 	}
 	return &m, warnings, nil
+}
+
+// importHeader matches the line that starts an import, refLine the line
+// that holds its ref, with the value in the second group.
+var (
+	importHeader = regexp.MustCompile(`^\s*\[\[\s*import\s*\]\]\s*(#.*)?$`)
+	tableHeader  = regexp.MustCompile(`^\s*\[`)
+	refLine      = regexp.MustCompile(`^(\s*ref\s*=\s*)(?:"[^"]*"|'[^']*')(.*)$`)
+)
+
+// SetImportRefs changes the ref of imports in the registry.toml in dir.
+// refs maps the position of an import in the file, counted from zero, to
+// its new ref. Only those lines change, so comments and layout stay. An
+// import whose ref it cannot find in that form is an error, and the file
+// is then left as it was.
+func SetImportRefs(dir string, refs map[int]string) error {
+	path := filepath.Join(dir, ManifestFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(data), "\n")
+	// cur is the position of the import the line belongs to, -1 outside one.
+	cur, count, done := -1, 0, map[int]bool{}
+	for i, line := range lines {
+		bare := strings.TrimSuffix(line, "\r")
+		switch {
+		case importHeader.MatchString(bare):
+			cur = count
+			count++
+			continue
+		case tableHeader.MatchString(bare):
+			cur = -1
+			continue
+		}
+		ref, ok := refs[cur]
+		if !ok || done[cur] {
+			continue
+		}
+		if m := refLine.FindStringSubmatch(bare); m != nil {
+			lines[i] = m[1] + strconv.Quote(ref) + m[2] + line[len(bare):]
+			done[cur] = true
+		}
+	}
+	text := strings.Join(lines, "\n")
+	var m Manifest
+	if _, err := toml.Decode(text, &m); err != nil {
+		return fmt.Errorf("rewrite %s: %w", ManifestFile, err)
+	}
+	for i, ref := range refs {
+		if i >= len(m.Imports) || m.Imports[i].Ref != ref {
+			return fmt.Errorf("could not find the ref of import %d in %s; change it by hand to %q", i+1, ManifestFile, ref)
+		}
+	}
+	return os.WriteFile(path, []byte(text), 0o644)
 }
 
 // GroupNames returns the group names in a stable order.

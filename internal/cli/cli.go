@@ -313,6 +313,84 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 		},
 	}
 
+	var update, check bool
+	imports := &cobra.Command{
+		Use:   "imports [directory]",
+		Short: "Show which imports of a registry are behind their repository",
+		Long: "For the author of a registry: compare every [[import]] in the registry.toml\n" +
+			"in the directory (default: the current one) with the repository it takes from.\n" +
+			"An import pinned to a commit or a tag is outdated when what it brings differs\n" +
+			"at the newest commit of that repository's default branch. Commits that change\n" +
+			"nothing of it do not count.\n\n" +
+			"With --update the ref of each outdated import is set to that newest commit;\n" +
+			"review and commit registry.toml afterwards. An import that would lose\n" +
+			"something it brings today is never moved.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := "."
+			if len(args) == 1 {
+				dir = args[0]
+			}
+			statuses, err := syncer.CompareImports(cmd.Context(), dir)
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if len(statuses) == 0 {
+				fmt.Fprintf(out, "%s imports nothing\n", filepath.Join(dir, registry.ManifestFile))
+				return nil
+			}
+			failed, outdated, stuck := false, 0, 0
+			for _, s := range statuses {
+				switch {
+				case s.Err != nil:
+					fmt.Fprintf(cmd.ErrOrStderr(), "error: import %s: %v\n", s.URL, s.Err)
+					failed = true
+				case s.Follows != "":
+					fmt.Fprintf(out, "%s: not pinned, follows %s\n", s.URL, s.Follows)
+				case !s.Behind():
+					fmt.Fprintf(out, "%s: up to date at %s\n", s.URL, short(s.From))
+				case !s.Outdated():
+					fmt.Fprintf(out, "%s: up to date at %s, newer commits change nothing of it\n", s.URL, short(s.From))
+				default:
+					outdated++
+					fmt.Fprintf(out, "%s: %s -> %s\n", s.URL, short(s.From), short(s.To))
+				}
+				for _, n := range s.Added {
+					fmt.Fprintf(out, "  + %s\n", n)
+				}
+				for _, n := range s.Changed {
+					fmt.Fprintf(out, "  ~ %s\n", n)
+				}
+				for _, n := range s.Removed {
+					fmt.Fprintf(out, "  - %s\n", n)
+				}
+				if s.Outdated() && !s.Movable() {
+					stuck++
+					fmt.Fprintln(out, "  the newest commit no longer has what is marked with -; --update leaves this import alone")
+				}
+			}
+			if update {
+				n, err := syncer.UpdateImports(dir, statuses)
+				if err != nil {
+					return err
+				}
+				if n > 0 {
+					fmt.Fprintf(out, "Moved %d of %d outdated imports in %s. Review and commit it.\n", n, outdated, registry.ManifestFile)
+				}
+			} else if outdated > stuck {
+				fmt.Fprintln(out, "Run again with --update to move the outdated imports to the newest commit.")
+			}
+			if failed || (check && outdated > 0) {
+				return errSyncFailed
+			}
+			return nil
+		},
+	}
+	imports.Flags().BoolVar(&update, "update", false, "set the ref of each outdated import to the newest commit")
+	imports.Flags().BoolVar(&check, "check", false, "for CI: change nothing and fail if an import is outdated")
+	imports.MarkFlagsMutuallyExclusive("update", "check")
+
 	// permit adds or removes guarded kinds of a registry and syncs.
 	permit := func(cmd *cobra.Command, args []string, allow bool) error {
 		loc, err := locate()
@@ -438,7 +516,7 @@ func newRegistry(locate func() (config.Location, error)) *cobra.Command {
 	set.Flags().StringVar(&newURL, "url", "", "the git URL of the registry")
 	registryFlags(set, &edit)
 
-	cmd.AddCommand(add, list, remove, set, setup, allow, disallow)
+	cmd.AddCommand(add, list, remove, set, setup, imports, allow, disallow)
 	return cmd
 }
 

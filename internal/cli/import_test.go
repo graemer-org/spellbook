@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -133,5 +135,126 @@ func TestPushRefusesAChangeToAnImportedSkill(t *testing.T) {
 	code, out := e.run("push", skill, "--to", "mine", "--yes")
 	if code == 0 || !strings.Contains(out, "imports skill \"a\" from") {
 		t.Fatalf("expected a refusal, got %d:\n%s", code, out)
+	}
+}
+
+// head returns the commit the repository in dir is at.
+func (e *env) head(dir string) string {
+	e.t.Helper()
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestRegistryImportsReportsAndMovesAnOutdatedPin(t *testing.T) {
+	e := newEnv(t)
+	other := e.repo(map[string]string{"grill-me": "v1", "unwanted": "v1"})
+	pinned := e.head(other)
+	manifest := "version = 1\n\n# Pinned on purpose.\n[[import]]\nurl = \"" + other + "\"\nref = \"" + pinned + "\" # moved by hand\nskills = [\"grill-me\"]\n\n[groups.all]\nskills = [\"grill-me\"]\n"
+	repo := e.repo(map[string]string{"skills/own": "v1"})
+	file := filepath.Join(repo, "registry.toml")
+	write(t, file, manifest)
+
+	if out := e.mustRun("registry", "imports", repo); !strings.Contains(out, "up to date at "+pinned[:7]) {
+		t.Fatalf("a pin at the newest commit should be up to date:\n%s", out)
+	}
+
+	// A commit that does not touch what is imported is no reason to move.
+	e.writeSkills(other, map[string]string{"unwanted": "v2"})
+	e.commit(other, "elsewhere")
+	out := e.mustRun("registry", "imports", repo, "--check")
+	if !strings.Contains(out, "newer commits change nothing of it") {
+		t.Fatalf("expected the import to count as up to date:\n%s", out)
+	}
+	e.mustRun("registry", "imports", repo, "--update")
+	if read(t, file) != manifest {
+		t.Fatalf("--update changed a manifest with nothing outdated:\n%s", read(t, file))
+	}
+
+	e.writeSkills(other, map[string]string{"grill-me": "v2"})
+	e.commit(other, "v2")
+	newest := e.head(other)
+	code, out := e.run("registry", "imports", repo, "--check")
+	if code == 0 || !strings.Contains(out, pinned[:7]+" -> "+newest[:7]) || !strings.Contains(out, "~ grill-me") || strings.Contains(out, "unwanted") {
+		t.Fatalf("--check: exit %d\n%s", code, out)
+	}
+	if read(t, file) != manifest {
+		t.Fatal("--check changed the manifest")
+	}
+	if out := e.mustRun("registry", "imports", repo); !strings.Contains(out, "--update") {
+		t.Fatalf("expected a hint at --update:\n%s", out)
+	}
+
+	out = e.mustRun("registry", "imports", repo, "--update")
+	if !strings.Contains(out, "Moved 1 of 1") {
+		t.Fatalf("--update:\n%s", out)
+	}
+	// Only the ref changed: comments and the rest of the file stay.
+	if want := strings.Replace(manifest, pinned, newest, 1); read(t, file) != want {
+		t.Fatalf("manifest after --update:\n%s\nwant:\n%s", read(t, file), want)
+	}
+	if out := e.mustRun("registry", "imports", repo, "--check"); !strings.Contains(out, "up to date at "+newest[:7]) {
+		t.Fatalf("after --update:\n%s", out)
+	}
+}
+
+func TestRegistryImportsLeavesUnpinnedAndBrokenImportsAlone(t *testing.T) {
+	e := newEnv(t)
+	other := e.repo(map[string]string{"a": "v1", "b": "v1"})
+	pinned := e.head(other)
+	e.git(other, "tag", "v1")
+	tagged := e.repo(map[string]string{"c": "v1"})
+	e.git(tagged, "tag", "-a", "v1", "-m", "v1")
+	e.writeSkills(tagged, map[string]string{"c": "v2", "d": "v1"})
+	e.commit(tagged, "v2")
+	// The repository drops a skill the import names.
+	if err := os.RemoveAll(filepath.Join(other, "b")); err != nil {
+		t.Fatal(err)
+	}
+	e.writeSkills(other, map[string]string{"a": "v2"})
+	e.commit(other, "drop b")
+
+	manifest := "version = 1\n" +
+		"[[import]]\nurl = \"" + other + "\"\n" +
+		"[[import]]\nurl = \"" + other + "\"\nref = \"main\"\n" +
+		"[[import]]\nurl = \"" + other + "\"\nref = \"" + pinned + "\"\nskills = [\"a\", \"b\"]\n" +
+		"[[import]]\nurl = \"" + tagged + "\"\nref = 'v1'\n" +
+		"[[import]]\nurl = \"" + filepath.Join(e.home, "nowhere") + "\"\nref = \"v1\"\n"
+	repo := t.TempDir()
+	file := filepath.Join(repo, "registry.toml")
+	write(t, file, manifest)
+
+	code, out := e.run("registry", "imports", repo, "--update")
+	if code == 0 {
+		t.Fatalf("an import that cannot be reached should fail the command:\n%s", out)
+	}
+	for _, want := range []string{
+		"not pinned, follows the default branch",
+		"not pinned, follows branch main",
+		"~ a", "- b", "--update leaves this import alone",
+		"+ d", "~ c", "Moved 1 of 2",
+		"error: import " + filepath.Join(e.home, "nowhere"),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output misses %q:\n%s", want, out)
+		}
+	}
+	// Only the tag moved, to the newest commit of its repository.
+	if want := strings.Replace(manifest, "'v1'", `"`+e.head(tagged)+`"`, 1); read(t, file) != want {
+		t.Fatalf("manifest after --update:\n%s\nwant:\n%s", read(t, file), want)
+	}
+}
+
+func TestRegistryImportsNeedsAManifest(t *testing.T) {
+	e := newEnv(t)
+	dir := t.TempDir()
+	if code, out := e.run("registry", "imports", dir); code == 0 || !strings.Contains(out, "has no registry.toml") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	write(t, filepath.Join(dir, "registry.toml"), "version = 1\n")
+	if out := e.mustRun("registry", "imports", dir); !strings.Contains(out, "imports nothing") {
+		t.Fatalf("unexpected output:\n%s", out)
 	}
 }

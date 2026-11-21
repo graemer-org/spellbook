@@ -129,6 +129,12 @@ func fetchImport(ctx context.Context, r config.Registry, imp Import) (*Snapshot,
 	return fetch(ctx, sub, false)
 }
 
+// FetchImport fetches what one import names, as the subscribers of the
+// registry it is in would get it.
+func FetchImport(ctx context.Context, imp Import) (*Snapshot, error) {
+	return fetchImport(ctx, config.Registry{Name: "import"}, imp)
+}
+
 func fetch(ctx context.Context, r config.Registry, top bool) (*Snapshot, error) {
 	dir, err := CheckoutDir(r)
 	if err != nil {

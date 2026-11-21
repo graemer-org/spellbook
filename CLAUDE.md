@@ -130,6 +130,11 @@ go vet ./... && gofmt -l .    # must be clean before committing
   given to one repository. The registry's own resource wins over an
   imported one of the same name, a failed import fails the registry, and
   push refuses to change an imported resource.
+- **`registry imports` is for the author of a registry.** It reads the
+  `registry.toml` of a directory, not the configuration. An import is
+  outdated only when what it brings differs at the newest commit of the
+  default branch. `--update` changes nothing but the `ref` lines, and
+  never moves an import that would lose something it brings today.
 - **`doctor` reports, it never repairs.** It changes nothing, says for
   every finding what the user can do, and fails only for what stops
   Spellbook from working (git, configuration, an unreachable registry).

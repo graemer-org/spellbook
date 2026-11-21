@@ -125,6 +125,40 @@ func RemoteHead(ctx context.Context, url, ref string) (string, error) {
 	return commit, nil
 }
 
+// Kinds of ref, as RefKind reports them.
+const (
+	RefBranch = "branch"
+	RefTag    = "tag"
+	RefCommit = "commit"
+)
+
+// RefKind says what ref is in the repository at url, and for a branch or a
+// tag the commit it points at. A ref the repository has no branch or tag
+// for is taken to be a commit. A name that is both resolves to the tag, as
+// it does for git fetch.
+func RefKind(ctx context.Context, url, ref string) (kind, commit string, err error) {
+	out, err := run(ctx, "", "ls-remote", "--quiet", url, "refs/tags/"+ref, "refs/tags/"+ref+"^{}", "refs/heads/"+ref)
+	if err != nil {
+		return "", "", err
+	}
+	kind = RefCommit
+	for _, line := range strings.Split(out, "\n") {
+		sha, name, ok := strings.Cut(line, "\t")
+		switch {
+		case !ok:
+		case strings.HasPrefix(name, "refs/tags/"):
+			// The peeled line follows the tag's own and names the commit.
+			kind, commit = RefTag, sha
+		case kind == RefCommit:
+			kind, commit = RefBranch, sha
+		}
+	}
+	if kind == RefCommit {
+		commit = ref
+	}
+	return kind, commit, nil
+}
+
 // Uncommitted returns how many of the given paths in the repository at dir
 // have changes that are not committed. It returns -1 when dir is not
 // inside a git repository.
